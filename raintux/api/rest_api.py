@@ -18,6 +18,10 @@ from raintux.core.config import RainTuxConfig
 log = logging.getLogger(__name__)
 
 
+class BangRequest(BaseModel):
+    bang: str
+
+
 class SkinConfigUpdate(BaseModel):
     """Per-skin settings payload (Phase 1 subset)."""
 
@@ -85,12 +89,20 @@ def build_app(engine: Any, cfg: RainTuxConfig) -> FastAPI:
 
     @app.put("/skins/{skin_path:path}/config")
     async def put_skin_config(skin_path: str, body: SkinConfigUpdate) -> dict[str, str]:
-        """TODO: apply X/Y / transparency to GTK window (Phase 1 stub)."""
+        """Move the window, change transparency (0..1) or click-through."""
         sid = unquote(skin_path).strip()
-        if sid not in engine.skins:
+        ok = await asyncio.to_thread(
+            engine.apply_window_settings, sid, body.x, body.y, body.transparency, body.click_through
+        )
+        if not ok:
             raise HTTPException(status_code=404, detail="skin not loaded")
-        _ = body
-        return {"status": "noop", "id": sid}
+        return {"status": "updated", "id": sid}
+
+    @app.post("/bang")
+    async def run_bang(body: BangRequest) -> dict[str, str]:
+        """Run a bang like Rainmeter's command line: ``!Refresh Config`` / ``[!SetVariable A 1 Config]``."""
+        await asyncio.to_thread(engine.run_bang_threadsafe, body.bang)
+        return {"status": "ok"}
 
     @app.get("/system/status")
     async def system_status() -> dict[str, Any]:

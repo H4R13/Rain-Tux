@@ -1,38 +1,24 @@
-"""Normalize Rainmeter-style .ini files for cross-platform loading."""
+"""Decode Rainmeter ``.ini`` / ``.inc`` files (UTF-8, UTF-16 with BOM, or ANSI)."""
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
-
-_WIN_PATH_SEP = re.compile(r"\\+")
+from raintux.core.ini_writer import detect_encoding
 
 
 def normalize_text(text: str) -> str:
-    """Strip BOM, normalize newlines, fix Windows path separators in values."""
-    if text.startswith("\ufeff"):
+    """Strip a BOM and normalize newlines.
+
+    Values are left untouched: backslashes are meaningful in regular expressions
+    (``RegExp=``, ``Substitute=``) and file paths are normalized where they are used.
+    """
+    if text.startswith("﻿"):
         text = text[1:]
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    lines_out: list[str] = []
-    for line in text.split("\n"):
-        stripped = line.lstrip()
-        if stripped and not stripped.startswith(";") and "=" in stripped:
-            key, _sep, value = stripped.partition("=")
-            key = key.rstrip()
-            value = value.strip()
-            if any(ch in value for ch in ("\\", "/")):
-                value = _WIN_PATH_SEP.sub("/", value)
-            line = f"{key}={value}"
-        lines_out.append(line)
-    return "\n".join(lines_out)
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def read_ini_normalized(path: Path) -> str:
-    """Read UTF-8 (with optional BOM) and return normalized content."""
+    """Read a skin file in whatever encoding Rainmeter would accept."""
     raw = path.read_bytes()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1", errors="replace")
-    return normalize_text(text)
+    return normalize_text(raw.decode(detect_encoding(raw), errors="replace"))

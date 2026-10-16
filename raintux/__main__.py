@@ -33,7 +33,7 @@ def _reexec_with_layer_shell_preload() -> None:
 
 
 def main() -> None:
-    """Start the RainTux engine (GTK main loop + background asyncio + API)."""
+    """Start RainTux, or pass arguments (``!Bang``, ``--manage``, ``file.rmskin``) to the running instance."""
     _reexec_with_layer_shell_preload()
     from raintux.launch_env import load_launch_env
 
@@ -42,7 +42,7 @@ def main() -> None:
     from raintux.core.engine import run_engine
 
     dev = os.environ.get("RAINTUX_DEV", "").lower() in ("1", "true", "yes")
-    raise SystemExit(run_engine(dev_mode=dev))
+    raise SystemExit(run_engine(dev_mode=dev, argv=sys.argv))
 
 
 if __name__ == "__main__":
