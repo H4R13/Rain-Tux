@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 from gi.repository import Gdk, GLib, Gtk
 
+from raintux.gui.compat import load_css
+
 from raintux.measures.plugins.inputtext import entry_css
 from raintux.wayland.layer_window import _LayerShell, layer_shell_available, monitor_at
 
@@ -31,9 +33,10 @@ def ask_text(app: Gtk.Application, skin: Skin, rect: tuple[float, float, float, 
         entry.set_max_length(int(style["limit"]))
     if style.get("number"):
         entry.set_input_purpose(Gtk.InputPurpose.NUMBER)
-    entry.set_alignment({"center": 0.5, "right": 1.0}.get(style.get("align", "left")[:6].rstrip("tbc"), 0.0))
+    align = str(style.get("align", "left"))
+    entry.set_alignment(0.5 if align.startswith("center") else 1.0 if align.startswith("right") else 0.0)
     css = Gtk.CssProvider()
-    css.load_from_string(entry_css(style) + " window.raintux-input-win { background: transparent; }")
+    load_css(css, entry_css(style) + " window.raintux-input-win { background: transparent; }")
     entry.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
     win.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
     win.add_css_class("raintux-input-win")

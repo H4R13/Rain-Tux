@@ -199,11 +199,8 @@ class Meter(Section):
         self.h_opt = parse_number(h, 0.0, self.skin.measure_number) if h else None
         p = parse_numbers(self.get("padding"), 4, 0.0, self.skin.measure_number)
         self.padding = (p[0], p[1], p[2], p[3])
-        hidden_spec = self.get("hidden", "0")
-        if hidden_spec != self._hidden_spec:
-            # Re-read Hidden only when its value changed, so !ShowMeter / !HideMeter stick.
-            self._hidden_spec = hidden_spec
-            self.hidden = parse_number(hidden_spec, 0.0, self.skin.measure_number) != 0
+        # Re-read on every read like Rainmeter; !ShowMeter / !HideMeter also set the option.
+        self.hidden = parse_number(self.get("hidden", "0"), 0.0, self.skin.measure_number) != 0
         self.solid = self.get_color("solidcolor", (0, 0, 0, 0))
         self.solid2 = self.get_color("solidcolor2", self.solid) if self.has("solidcolor2") else None
         self.gradient_angle = self.get_number("gradientangle", 0)
@@ -229,10 +226,10 @@ class Meter(Section):
     def default_update_divider(self) -> int:
         return self.skin.default_update_divider
 
-    def set_option(self, key: str, value: str) -> None:
-        if key.strip().lower() == "hidden":
-            self._hidden_spec = None  # !SetOption Hidden always re-applies, like Rainmeter
-        super().set_option(key, value)
+    def set_hidden(self, hidden: bool) -> None:
+        """``!ShowMeter`` / ``!HideMeter``: Rainmeter changes the Hidden option too."""
+        self.hidden = hidden
+        self.overrides["hidden"] = "1" if hidden else "0"
 
     def read_meter(self) -> None:
         """Type-specific options."""

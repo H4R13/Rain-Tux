@@ -12,7 +12,8 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 _CACHE: OrderedDict[tuple[Any, ...], Image | None] = OrderedDict()
-_CACHE_MAX = 256
+_CACHE_MAX = 512
+_CACHE_BYTES = 384 * 1024 * 1024  # decoded RGBA + Cairo copy, roughly 8 bytes per pixel
 
 
 @dataclass(eq=False)
@@ -109,8 +110,11 @@ def load_image(
     except Exception:
         log.warning("cannot load image %s", real, exc_info=True)
     _CACHE[key] = img
-    while len(_CACHE) > _CACHE_MAX:
-        _CACHE.popitem(last=False)
+    total = sum(8 * i.width * i.height for i in _CACHE.values() if i is not None)
+    while len(_CACHE) > 1 and (len(_CACHE) > _CACHE_MAX or total > _CACHE_BYTES):
+        _k, old = _CACHE.popitem(last=False)
+        if old is not None:
+            total -= 8 * old.width * old.height
     return img
 
 

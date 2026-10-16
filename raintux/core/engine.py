@@ -235,7 +235,10 @@ class RainTuxEngine:
             if act.skin.closed:
                 act.timer = 0
                 return GLib.SOURCE_REMOVE
-            act.skin.update()
+            try:
+                act.skin.update()
+            except Exception:
+                log.exception("update of %s failed", act.skin.config)
             if act.skin.update_ms != interval:
                 self._schedule(act)
                 return GLib.SOURCE_REMOVE
@@ -324,6 +327,9 @@ class RainTuxEngine:
             out[act.skin.config.replace("\\", "/") + "/" + act.skin.ini_path.name] = act
         return out
 
+    def active_list_threadsafe(self) -> list[dict[str, str]]:
+        return _on_main_thread(lambda: [{"id": k, "path": str(v.ini_path)} for k, v in self.skins.items()])
+
     def load_skin(self, skin_id: str, ini_path: Path | None = None) -> None:
         def go() -> None:
             ini = ini_path or self.resolve_ini(skin_id)
@@ -396,6 +402,18 @@ class RainTuxEngine:
                     log.exception("could not activate %s", config)
         self.state.first_run_done = True
         self.schedule_save()
+        display = Gdk.Display.get_default()
+        if display is not None:
+            display.get_monitors().connect("items-changed", lambda *_a: GLib.timeout_add(
+                500, lambda: (self._monitors_changed(), GLib.SOURCE_REMOVE)[1]))
+
+    def _monitors_changed(self) -> None:
+        """A screen was added/removed: re-place every skin (keep-on-screen ones come back into view)."""
+        for act in self.active.values():
+            act.skin.invalidate_builtins()
+            st = act.skin.state
+            x, y = (self.clamp_on_screen(act.window, st.x, st.y) if st.keep_on_screen else (st.x, st.y))
+            act.window.move_to(x, y)
 
     def _activate_default_layout(self) -> None:
         mons = monitors()
@@ -1014,8 +1032,15 @@ def run_engine(dev_mode: bool = False, argv: list[str] | None = None) -> int:
             log.warning("unknown arguments: %s", args)
 
     app = App()
+    if not _has_session_bus():
+        # Without D-Bus GApplication cannot register; run as a plain, non-unique app.
+        app.set_flags(app.get_flags() | Gio.ApplicationFlags.NON_UNIQUE)
     eng = RainTuxEngine(cfg, app)
     _ENGINE = eng
+    import signal
+
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, lambda *_a: (app.quit(), GLib.SOURCE_REMOVE)[1])
 
     def on_startup(_app: Gtk.Application) -> None:
         from raintux.onboarding.first_run import begin_first_run_or_skip
@@ -1041,6 +1066,13 @@ def run_engine(dev_mode: bool = False, argv: list[str] | None = None) -> int:
     import sys
 
     return app.run(argv if argv is not None else sys.argv)
+
+
+def _has_session_bus() -> bool:
+    if os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        return True
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return Path(runtime, "bus").exists()
 
 
 def _quote(arg: str) -> str:

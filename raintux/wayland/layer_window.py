@@ -16,6 +16,8 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk
 
+from raintux.gui.compat import load_css
+
 if TYPE_CHECKING:
     from raintux.core.engine import RainTuxEngine
     from raintux.core.skin import Skin
@@ -52,7 +54,7 @@ def _install_css_once() -> None:
     if _css_installed:
         return
     css = Gtk.CssProvider.new()
-    css.load_from_string("window.raintux-skin { background: transparent; box-shadow: none; }")
+    load_css(css, "window.raintux-skin { background: transparent; box-shadow: none; }")
     Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
     _css_installed = True
 

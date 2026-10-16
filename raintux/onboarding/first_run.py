@@ -14,6 +14,8 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
+from raintux.gui.compat import load_css
+
 if TYPE_CHECKING:
     pass
 
@@ -231,7 +233,7 @@ def begin_first_run_or_skip(app: Gtk.Application, on_done: Callable[[bool], None
     outer.append(foot)
 
     css = Gtk.CssProvider.new()
-    css.load_from_string(
+    load_css(css, 
         """
         window.raintux-splash { background: #000000; }
         window.raintux-splash label { color: white; font-weight: 700; font-size: 13pt;

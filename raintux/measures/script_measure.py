@@ -71,6 +71,13 @@ function SKIN:GetW() return py.skingeom('w') end
 function SKIN:GetH() return py.skingeom('h') end
 SELF = wrap_measure(py.self())
 print = function(...) py.log(...) end
+__raintux_deadline = math.huge
+debug.sethook(function()
+  if os.clock() > __raintux_deadline then
+    __raintux_deadline = math.huge
+    error("script took longer than 5 seconds; stopped", 2)
+  end
+end, "", 100000)
 """
 
 
@@ -212,6 +219,8 @@ class ScriptMeasure(Measure):
         py = lua.table_from({k: getattr(api, k) for k in dir(api) if not k.startswith("_") and callable(getattr(api, k))})
         lua.execute(_PRELUDE, py)
         try:
+            self._lua = lua
+            self._arm()
             lua.execute(source)
             init = lua.globals().Initialize
             if init is not None:
@@ -220,6 +229,11 @@ class ScriptMeasure(Measure):
             log.error("[%s] Lua error in %s: %s", self.name, path.name, e)
         self._lua = lua
 
+    def _arm(self) -> None:
+        """Watchdog: a call that runs for more than 5 s of CPU raises a Lua error."""
+        g = self._lua.globals()
+        g["__raintux_deadline"] = self._lua.eval("os.clock()") + 5
+
     def update_value(self) -> None:
         if self._lua is None:
             return
@@ -227,6 +241,7 @@ class ScriptMeasure(Measure):
         if fn is None:
             return
         try:
+            self._arm()
             result = fn()
         except Exception as e:
             log.error("[%s] Lua Update(): %s", self.name, e)
@@ -244,6 +259,7 @@ class ScriptMeasure(Measure):
         if self._lua is None:
             return
         try:
+            self._arm()
             self._lua.execute(args)
         except Exception as e:
             log.error("[%s] Lua command %r: %s", self.name, args, e)

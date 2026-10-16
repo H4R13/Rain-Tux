@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 from gi.repository import Gio, GLib, Gtk, Pango
 
+from raintux.gui.compat import load_css
+
 from raintux.gui.context_menu import POSITIONS, TOGGLES
 
 if TYPE_CHECKING:
@@ -53,7 +55,7 @@ class ManageWindow(Gtk.ApplicationWindow):
         self.engine = engine
         self.set_default_size(940, 620)
         css = Gtk.CssProvider()
-        css.load_from_string(_CSS)
+        load_css(css, _CSS)
         Gtk.StyleContext.add_provider_for_display(self.get_display(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
         self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)

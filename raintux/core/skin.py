@@ -833,7 +833,7 @@ class Skin:
 
     def _set_hidden(self, meters: Any, hidden: bool | None) -> None:
         for mt in meters:
-            mt.hidden = (not mt.hidden) if hidden is None else hidden
+            mt.set_hidden((not mt.hidden) if hidden is None else hidden)
 
     def _bang_showmeter(self, name: str) -> None:
         self._set_hidden(self._targets(name, self.meters), False)

@@ -128,10 +128,21 @@ class WebParserPlugin(Measure):
                 headers[name.strip()] = value.strip()
             i += 1
         codepage = self.codepage
+        pattern = self.skin.resolve(self.regexp) if self.regexp else None
 
-        def work() -> str:
+        def work() -> tuple[str, list[str] | None]:
+            # Download and match off the UI thread: a slow page or a pathological regex
+            # must not freeze the desktop.
             body, ctype = fetch(url, headers)
-            return _decode(body, codepage, ctype)
+            text = _decode(body, codepage, ctype)
+            if pattern is None:
+                return text, [text]
+            try:
+                m = compile_pcre(pattern).search(text)
+            except re.error as e:
+                log.warning("[%s] WebParser RegExp: %s", self.name, e)
+                return text, None
+            return text, ([g if g is not None else "" for g in m.groups()] if m else None)
 
         self.run_in_background(work, self._fetched)
 
@@ -143,21 +154,12 @@ class WebParserPlugin(Measure):
                 self.string = self.error_string
             self.skin.execute(self.get("onconnecterroraction"), self)
             return
-        text: str = result
-        if self.regexp:
-            try:
-                m = compile_pcre(self.skin.resolve(self.regexp)).search(text)
-            except re.error as e:
-                log.warning("[%s] WebParser RegExp: %s", self.name, e)
-                m = None
-            if m is None:
-                self.skin.execute(self.get("onregexperroraction"), self)
-                if self.error_string:
-                    self.string = self.error_string
-                return
-            captures = [g if g is not None else "" for g in m.groups()]
-        else:
-            captures = [text]
+        text, captures = result
+        if captures is None:
+            self.skin.execute(self.get("onregexperroraction"), self)
+            if self.error_string:
+                self.string = self.error_string
+            return
         self._captures = [self._decode_refs(c) for c in captures]
         if self.string_index > 0:
             self.string = self._pick(self._captures, self.string_index)

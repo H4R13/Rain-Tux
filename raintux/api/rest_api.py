@@ -52,7 +52,7 @@ def build_app(engine: Any, cfg: RainTuxConfig) -> FastAPI:
 
     @app.get("/skins/active")
     async def active_skins() -> list[dict[str, Any]]:
-        return [{"id": sid, "path": str(rt.ini_path)} for sid, rt in engine.skins.items()]
+        return await asyncio.to_thread(engine.active_list_threadsafe)
 
     @app.post("/skins/{skin_path:path}/load")
     async def load_skin(skin_path: str) -> dict[str, str]:
@@ -78,12 +78,13 @@ def build_app(engine: Any, cfg: RainTuxConfig) -> FastAPI:
     @app.get("/skins/{skin_path:path}/config")
     async def get_skin_config(skin_path: str) -> dict[str, Any]:
         sid = unquote(skin_path).strip()
-        rt = engine.skins.get(sid)
+        active = {a["id"]: a for a in await asyncio.to_thread(engine.active_list_threadsafe)}
+        rt = active.get(sid)
         if not rt:
             raise HTTPException(status_code=404, detail="skin not loaded")
         return {
             "id": sid,
-            "path": str(rt.ini_path),
+            "path": rt["path"],
             "compositor": engine.compositor.value,
         }
 
@@ -108,7 +109,7 @@ def build_app(engine: Any, cfg: RainTuxConfig) -> FastAPI:
     async def system_status() -> dict[str, Any]:
         return {
             "compositor": engine.compositor.value,
-            "skins_loaded": list(engine.skins.keys()),
+            "skins_loaded": [a["id"] for a in await asyncio.to_thread(engine.active_list_threadsafe)],
             "api": {"host": cfg.api.host, "port": cfg.api.port},
         }
 
