@@ -214,7 +214,6 @@ def run_engine(dev_mode: bool = False) -> int:
 
         def do_activate(self) -> None:
             """Gtk.Application requires activation; overlay windows are created by the engine/API."""
-            _ = self  # hold reference — no primary window required
 
     app = App()
     eng = RainTuxEngine(cfg, app)
@@ -236,6 +235,10 @@ def run_engine(dev_mode: bool = False) -> int:
 
     def on_startup(_app: Gtk.Application) -> None:
         from raintux.onboarding.first_run import begin_first_run_or_skip
+
+        # Keep running with zero windows: skins are loaded later (API / dev auto-load),
+        # and GApplication otherwise exits as soon as activate returns.
+        _app.hold()
 
         def after_first_run(ok: bool) -> None:
             if not ok:

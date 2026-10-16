@@ -10,6 +10,7 @@ from urllib.parse import unquote
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from raintux.core.config import RainTuxConfig
@@ -29,6 +30,14 @@ class SkinConfigUpdate(BaseModel):
 def build_app(engine: Any, cfg: RainTuxConfig) -> FastAPI:
     """Create the FastAPI app bound to a running :class:`~raintux.core.engine.RainTuxEngine`."""
     app = FastAPI(title="RainTux API", version="0.1.0")
+    # The Skin Manager (Vite, :8080) is a different origin than the API (:7272);
+    # allow loopback origins only so browsers can call us but random sites can't.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$",
+        allow_methods=["GET", "POST", "PUT"],
+        allow_headers=["Content-Type"],
+    )
     app.state.engine = engine
     app.state.cfg = cfg
     app.state.ws_clients: set[WebSocket] = set()

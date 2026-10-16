@@ -19,11 +19,12 @@ Rainmeter-style transparent desktop overlays for Linux, targeting **Wayland** co
 **Debian / Ubuntu**
 
 - `libgtk-4-1`, `gir1.2-gtk-4.0`, `libcairo2-dev`, `python3-gi`, `python3-gi-cairo`
-- `libgtk4-layer-shell0` and typelibs if packaged (e.g. `gir1.2-gtk4layershell-1.0` when available), or build [gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) from source.
+- `libgtk4-layer-shell0` and typelibs if packaged (e.g. `gir1.2-gtk4layershell-1.0` when available), or build [gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) from source (Ubuntu 24.04 does not package it; v1.0.4 builds fine with `meson setup build --prefix=/usr -Dintrospection=true`).
+- To `pip install` (pip compiles pycairo / PyGObject): `python3-dev`, `libcairo2-dev`, `libgirepository-2.0-dev`, `pkg-config`. Alternatively create the venv with `--system-site-packages` and use the distro's `python3-gi`.
 
-**dbus**
+**dbus** (optional)
 
-- `python-dbus` / `dbus-python` dependencies for MPRIS and future GNOME helper (Phase 2+).
+- `pip install ".[dbus]"` for MPRIS and the future GNOME helper (Phase 2+); building `dbus-python` needs `libdbus-1-dev`, or use the distro's `python3-dbus`.
 
 Install Python deps:
 
@@ -55,7 +56,7 @@ make dev
 
 ### Hyprland / Sway / other wlroots compositors
 
-Install **gtk4-layer-shell**. RainTux selects the WLR-style backend when layer shell globals are present or when `XDG_CURRENT_DESKTOP` indicates a wlroots-based session. Surfaces use the **BOTTOM** layer and transparent RGBA by default.
+Install **gtk4-layer-shell**. It must be loaded before libwayland, so RainTux re-launches itself once with `LD_PRELOAD` pointing at `libgtk4-layer-shell.so` when the library is found (opt out: `RAINTUX_NO_PRELOAD=1`). RainTux selects the WLR-style backend when layer shell globals are present or when `XDG_CURRENT_DESKTOP` indicates a wlroots-based session. Surfaces use the **BOTTOM** layer and transparent RGBA by default.
 
 ### KDE Plasma (Wayland)
 

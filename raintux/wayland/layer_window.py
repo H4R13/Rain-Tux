@@ -110,11 +110,9 @@ class LayerShellWindow(Gtk.ApplicationWindow):
         try:
             _LayerShell.init_for_window(self)
             _LayerShell.set_layer(self, _LayerShell.Layer.BOTTOM)
-            _LayerShell.set_anchor(
-                self,
-                _LayerShell.Edge.TOP
-                | _LayerShell.Edge.LEFT,
-            )
+            # set_anchor takes one edge at a time (edge, anchor_to_edge), not a bitmask.
+            _LayerShell.set_anchor(self, _LayerShell.Edge.TOP, True)
+            _LayerShell.set_anchor(self, _LayerShell.Edge.LEFT, True)
             _LayerShell.set_margin(self, _LayerShell.Edge.TOP, 0)
             _LayerShell.set_margin(self, _LayerShell.Edge.LEFT, 0)
             _LayerShell.set_namespace(self, self._namespace)
