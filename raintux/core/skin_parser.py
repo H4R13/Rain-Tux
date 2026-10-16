@@ -152,9 +152,11 @@ class _Reader:
                 # Rainmeter strips one pair of enclosing quotes.
                 value = value[1:-1]
             if _is_include_key(key):
-                inc_rel = substitute_variables(value, self.variables(), path.parent, self.resources)
+                from raintux.core.paths import resolve_ci, windows_to_posix
+
+                inc_rel = windows_to_posix(substitute_variables(value, self.variables(), path.parent, self.resources))
                 inc = Path(inc_rel)
-                inc = inc if inc.is_absolute() else (path.parent / inc)
+                inc = resolve_ci(inc if inc.is_absolute() else (path.parent / inc))
                 if inc.is_file():
                     self.read(inc, stack + (path,), current)
                 else:

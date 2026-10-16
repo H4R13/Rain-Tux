@@ -23,7 +23,7 @@ def install_dialog(engine: RainTuxEngine, path: Path, parent: Any = None) -> Non
     except Exception as e:
         Gtk.AlertDialog(message="Not a valid skin package", detail=f"{path.name}: {e}").show(parent)
         return
-    win = Gtk.Window(title="Install skin", modal=parent is not None, transient_for=parent)
+    win = Gtk.Window(application=engine.app, title="Install skin", modal=parent is not None, transient_for=parent)
     win.set_default_size(460, 0)
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
     for m in ("top", "bottom", "start", "end"):
@@ -48,7 +48,7 @@ def install_dialog(engine: RainTuxEngine, path: Path, parent: Any = None) -> Non
         lines.append("Existing folders are backed up to @Backup: " + ", ".join(existing))
     box.append(Gtk.Label(label="\n".join(lines), xalign=0, wrap=True))
     load_cb = Gtk.CheckButton(label=f"Load {info.load}" if info.load else "Load after installing", active=bool(info.load))
-    load_cb.set_sensitive(bool(info.load) and info.load_type.lower() == "skin")
+    load_cb.set_sensitive(bool(info.load))
     box.append(load_cb)
     buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
     cancel = Gtk.Button(label="Cancel")
@@ -65,9 +65,12 @@ def install_dialog(engine: RainTuxEngine, path: Path, parent: Any = None) -> Non
             return
         win.destroy()
         if load_cb.get_active() and result.load:
-            parts = result.load.replace("/", "\\").split("\\")
-            config, file = "\\".join(parts[:-1]), parts[-1]
-            GLib.idle_add(lambda: (engine._safe_activate(config, file), False)[1])
+            if result.load_type.lower() == "layout":
+                GLib.idle_add(lambda: (engine.load_layout(result.load), False)[1])
+            else:
+                parts = result.load.replace("/", "\\").split("\\")
+                config, file = "\\".join(parts[:-1]), parts[-1]
+                GLib.idle_add(lambda: (engine._safe_activate(config, file), False)[1])
         if engine._manage_window is not None:
             engine._manage_window.refresh(select=result.skins[0] if result.skins else None)
 

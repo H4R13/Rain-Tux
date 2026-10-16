@@ -85,6 +85,7 @@ class RainTuxEngine:
         self._compositor = detect_compositor()
         self._manage_window: Any = None
         self._save_source = 0
+        self.tray: Any = None
 
     @property
     def compositor(self) -> CompositorKind:
@@ -121,7 +122,7 @@ class RainTuxEngine:
         for base in self.roots():
             if not base.is_dir():
                 continue
-            for ini in sorted(base.rglob("*.ini")):
+            for ini in sorted(base.rglob("*.ini"), key=lambda p: str(p).lower()):
                 rel = ini.relative_to(base)
                 if any(p.startswith("@") for p in rel.parts[:-1]) or len(rel.parts) < 2:
                     continue
@@ -217,6 +218,7 @@ class RainTuxEngine:
             window.fade_to(cs.window.alpha / 255.0, cs.window.fade_duration)
         self._schedule(act)
         self.schedule_save()
+        self._changed()
         log.info("activated %s (%s)", config, ini.name)
         return skin
 
@@ -259,6 +261,7 @@ class RainTuxEngine:
         fade = act.skin.state.fade_duration
         act.window.fade_to(0.0, fade, then=act.window.destroy)
         self.schedule_save()
+        self._changed()
         if self._manage_window is not None:
             self._manage_window.refresh()
 
@@ -271,6 +274,47 @@ class RainTuxEngine:
     def refresh_all(self) -> None:
         for act in list(self.active.values()):
             self.refresh_config(act.skin.config)
+
+    # ------------------------------------------------------------------ layouts
+    def list_layouts(self) -> list[str]:
+        from raintux.core.config import layouts_root
+        from raintux.core.layouts import list_layouts
+
+        return list_layouts(layouts_root())
+
+    def save_layout(self, name: str) -> None:
+        from raintux.core.config import layouts_root
+        from raintux.core.layouts import save_layout
+
+        save_layout(layouts_root(), name, self.state)
+        self._changed()
+
+    def load_layout(self, name: str) -> None:
+        """Replace the loaded skins with a layout (``!LoadLayout``)."""
+        from raintux.core.config import layouts_root
+        from raintux.core.layouts import read_layout
+
+        try:
+            configs = read_layout(layouts_root(), name, lambda c: self.list_configs().get(c.replace("/", "\\"), []))
+        except (FileNotFoundError, ValueError, OSError) as e:
+            log.warning("cannot load layout %s: %s", name, e)
+            return
+        for act in list(self.active.values()):
+            self.deactivate_config(act.skin.config)
+        for cfg, cs in sorted(configs.items(), key=lambda kv: kv[1].load_order):
+            mine = self.state.config(cfg)
+            mine.window = cs.window
+            mine.load_order = cs.load_order
+            self._safe_activate(cfg, cs.active_file)
+        self._changed()
+
+    def _changed(self) -> None:
+        """Skins or layouts changed: refresh the tray menu and the Manage window."""
+        if self.tray is not None:
+            try:
+                self.tray.rebuild()
+            except Exception:
+                log.debug("tray rebuild failed", exc_info=True)
 
     # API compatibility (called from FastAPI worker threads).
     @property
@@ -334,6 +378,13 @@ class RainTuxEngine:
     # ------------------------------------------------------------------ startup / shutdown
     def start(self) -> None:
         install_default_skins(self.primary_root())
+        if self.config.ui.tray:
+            try:
+                from raintux.gui.tray import Tray
+
+                self.tray = Tray(self)
+            except Exception:
+                log.info("tray icon unavailable", exc_info=True)
         active = self.state.active()
         if not active and not self.state.first_run_done:
             self._activate_default_layout()
@@ -477,7 +528,12 @@ class RainTuxEngine:
         if act is None:
             return
         area = act.window.area
-        area.set_cursor_from_name(cursor) if cursor else area.set_cursor(None)
+        if cursor and cursor.startswith("file:"):
+            area.set_cursor(_file_cursor(cursor[5:]))
+        elif cursor:
+            area.set_cursor_from_name(cursor)
+        else:
+            area.set_cursor(None)
         if (area.get_tooltip_text() or None) != tooltip:
             area.set_tooltip_text(tooltip)
 
@@ -532,6 +588,10 @@ class RainTuxEngine:
             return
         prog = args[0].strip()
         low = prog.lower()
+        if low.replace("\\", "/").rsplit("/", 1)[-1] == "rainmeter.exe":
+            if len(args) > 1:
+                self.execute_global(" ".join(_quote(a) for a in args[1:]))
+            return
         try:
             if re.match(r"^[a-z][a-z0-9+.\-]*:(//)?", low) and not re.match(r"^[a-z]:[\\/]", low):
                 Gio.AppInfo.launch_default_for_uri(prog, None)
@@ -557,7 +617,7 @@ class RainTuxEngine:
             log.exception("[%s] command failed: %s", skin.config, command)
 
     def open_in_editor(self, path: Path) -> None:
-        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+        editor = self.config.ui.editor or os.environ.get("VISUAL") or os.environ.get("EDITOR")
         if editor and shutil.which(editor.split()[0]):
             terminal_editors = {"vi", "vim", "nvim", "nano", "micro", "emacs -nw", "helix", "hx"}
             if editor in terminal_editors:
@@ -686,6 +746,8 @@ class RainTuxEngine:
                 from raintux.gui.context_menu import show_custom_menu
 
                 show_custom_menu(self, a.window, 10, 10)
+        elif name == "loadlayout" and args:
+            GLib.idle_add(lambda: (self.load_layout(args[0]), GLib.SOURCE_REMOVE)[1])
         elif name == "restart":
             GLib.idle_add(lambda: (self._restart(), GLib.SOURCE_REMOVE)[1])
         elif name == "debug":
@@ -814,6 +876,34 @@ class RainTuxEngine:
             self.schedule_save()
 
 
+_cursor_cache: dict[str, Any] = {}
+
+
+def _file_cursor(path: str) -> Any:
+    """A Windows .cur (or any image) as a GDK cursor, hotspot taken from the .cur header."""
+    if path in _cursor_cache:
+        return _cursor_cache[path]
+    cursor = None
+    try:
+        from raintux.meters.images import load_image
+
+        img = load_image(Path(path))
+        if img is not None:
+            hx = hy = 0
+            raw = Path(path).read_bytes()[:22]
+            if path.lower().endswith(".cur") and len(raw) >= 14 and raw[2:4] == b"\x02\x00":
+                hx = int.from_bytes(raw[10:12], "little")
+                hy = int.from_bytes(raw[12:14], "little")
+            data = img.pil.tobytes()
+            texture = Gdk.MemoryTexture.new(img.width, img.height, Gdk.MemoryFormat.R8G8B8A8,
+                                            GLib.Bytes.new(data), img.width * 4)
+            cursor = Gdk.Cursor.new_from_texture(texture, hx, hy, Gdk.Cursor.new_from_name("pointer", None))
+    except Exception:
+        log.debug("cursor %s failed", path, exc_info=True)
+    _cursor_cache[path] = cursor
+    return cursor
+
+
 def install_default_skins(root: Path) -> None:
     """Copy bundled skins into the user's skins folder (never overwriting user files)."""
     src = Path(__file__).resolve().parent.parent / "data" / "skins"
@@ -865,6 +955,17 @@ def run_engine(dev_mode: bool = False, argv: list[str] | None = None) -> int:
     """Start RainTux (GTK main loop), or forward the command line to the running instance."""
     logging.basicConfig(level=logging.DEBUG if dev_mode else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
+    import locale
+
+    try:
+        locale.setlocale(locale.LC_ALL, "")  # localized day/month names in Time measures
+    except locale.Error:
+        pass
+    from raintux.gui.fonts import install_font_aliases
+    from raintux.gui.log_buffer import install_log_buffer
+
+    install_font_aliases()
+    install_log_buffer()
     cfg = load_config()
     from raintux.api.rest_api import start_api_server
 
@@ -926,10 +1027,11 @@ def run_engine(dev_mode: bool = False, argv: list[str] | None = None) -> int:
             if not ok:
                 _app.quit()
                 return
-            try:
-                start_api_server(eng, cfg)
-            except Exception:
-                log.exception("API server failed to start")
+            if cfg.api.enabled:
+                try:
+                    start_api_server(eng, cfg)
+                except Exception:
+                    log.exception("API server failed to start")
             eng.start()
 
         begin_first_run_or_skip(_app, after_first_run)

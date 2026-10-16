@@ -10,6 +10,10 @@ from unittest import mock
 
 def _missing(name: str) -> bool:
     try:
+        if name.startswith("gi.repository."):
+            import gi
+
+            gi.require_version(name.rsplit(".", 1)[1], "1.0")
         importlib.import_module(name)
     except (ImportError, ValueError):
         return True

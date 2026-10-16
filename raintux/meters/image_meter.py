@@ -49,6 +49,16 @@ class ImageMeter(Meter):
         self.effects = image_options(self)
         self.img: Image | None = None
         self.src: tuple[float, float, float, float] | None = None
+        mask = self.get("maskimagename")
+        if mask:
+            base = self.get("maskimagepath")
+            if base:
+                mask = base.rstrip("/\\") + "/" + mask
+            self.mask: Image | None = load_image(self.skin.path(mask))
+        else:
+            self.mask = None
+        self.mask_flip = self.get("maskimageflip", "none").strip().lower()
+        self.mask_rotate = self.get_number("maskimagerotate", 0.0)
 
     def image_file(self) -> Path | None:
         name = self.skin.resolve(self.option_raw("imagename") or "", section_vars=self.dynamic)
@@ -125,7 +135,38 @@ class ImageMeter(Meter):
             cr.translate(cx, cy)
             cr.rotate(math.radians(self.rotate))
             cr.translate(-cx, -cy)
+        if self.mask is not None:
+            cr.push_group()
         draw_image_scaled(cr, self.img, x, y, w, h, alpha=self.alpha, margins=self.margins, tile=self.tile, src=self.src)
+        cr.restore()
+        if self.mask is not None:
+            self._apply_mask(cr)
+
+    def _apply_mask(self, cr: Any) -> None:
+        """``MaskImageName``: the image keeps only where the mask (scaled to the meter) is opaque."""
+        import cairo
+
+        content = cr.pop_group()
+        assert self.mask is not None
+        mw, mh = float(self.mask.width), float(self.mask.height)
+        bw, bh = self.content_w, self.content_h
+        if mw <= 0 or mh <= 0 or bw <= 0 or bh <= 0:
+            return
+        pat = cairo.SurfacePattern(self.mask.surface())
+        pat.set_filter(cairo.FILTER_GOOD)
+        m = cairo.Matrix()
+        # pattern space = mask pixels; user space = content box
+        m.translate(mw / 2, mh / 2)
+        if self.mask_rotate:
+            m.rotate(-math.radians(self.mask_rotate))
+        fx = -1 if self.mask_flip in ("horizontal", "both") else 1
+        fy = -1 if self.mask_flip in ("vertical", "both") else 1
+        m.scale(fx * mw / bw, fy * mh / bh)
+        m.translate(-bw / 2, -bh / 2)
+        pat.set_matrix(m)
+        cr.save()
+        cr.set_source(content)
+        cr.mask(pat)
         cr.restore()
 
     def hit_content(self, x: float, y: float) -> bool:

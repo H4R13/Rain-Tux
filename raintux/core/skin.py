@@ -462,7 +462,8 @@ class Skin:
         mt = self.meter(name)
         if mt is not None and colon:
             key = param.strip().upper()
-            x, y, w, h = mt.box()
+            x, y, _w, _h = mt.box()
+            w, h = mt.visible_size()
             vals = {"X": x, "Y": y, "W": w, "H": h, "XW": x + w, "YH": y + h}
             if key in vals:
                 return trim_number(vals[key])
@@ -559,13 +560,21 @@ class Skin:
         self.execute(self.rm.get("onupdateaction"), self.rm)
 
     def layout(self, force_size: bool = False) -> None:
+        # Relative meters (Rainmeter's UpdateRelativeMeters): contained meters chain inside their
+        # container; everything else chains to the previous non-contained meter (hidden ones too).
         for mt in self.meters:
             mt.children = []
+        last_in: dict[int, Any] = {}
+        prev: Meter | None = None
         for mt in self.meters:
-            if mt.container_name:
-                cont = self.meter(mt.container_name)
-                if cont is not None and cont is not mt:
-                    cont.children.append(mt)
+            cont = self.meter(mt.container_name) if mt.container_name else None
+            if cont is not None and cont is not mt:
+                cont.children.append(mt)
+                mt.relative_to = last_in.get(id(cont), cont)
+                last_in[id(cont)] = mt
+                continue
+            mt.relative_to = prev
+            prev = mt
         for mt in self.meters:
             mt.layout()
         if force_size or self.dynamic_window_size or self.counter <= 1 or not self.width:
@@ -575,17 +584,27 @@ class Skin:
         w = int(self.rm.get_number("skinwidth", 0)) if self.rm.has("skinwidth") else 0
         h = int(self.rm.get_number("skinheight", 0)) if self.rm.has("skinheight") else 0
         if not w or not h:
-            mw = mh = 0
+            # Rainmeter's ResizeWindow: meters (hidden ones at size 0) + BackgroundMargins, at least
+            # the background image; BackgroundMode=0 is exactly the image.
+            from raintux.meters.base_meter import parse_numbers
+
+            ml, mt_, mr, mb = (int(v) for v in parse_numbers(self.rm.get("backgroundmargins"), 4))
+            mw, mh = ml, mt_
             for mt in self.meters:
-                if mt.hidden or mt.container_name:
+                if mt.container_name and self.meter(mt.container_name) is not None:
                     continue
-                x, y, bw, bh = mt.box()
-                mw = max(mw, int(x + bw + 0.999))
-                mh = max(mh, int(y + bh + 0.999))
+                x, y, _bw, _bh = mt.box()
+                vw, vh = mt.visible_size()
+                mw = max(mw, int(x + vw + 0.999))
+                mh = max(mh, int(y + vh + 0.999))
+            mw += mr
+            mh += mb
             bg = self.background_size()
             if bg:
-                mw = max(mw, bg[0])
-                mh = max(mh, bg[1])
+                if self.rm.get_int("backgroundmode", 0) == 0:
+                    mw, mh = bg
+                else:
+                    mw, mh = max(mw, bg[0]), max(mh, bg[1])
             w = w or mw
             h = h or mh
         w, h = max(1, w), max(1, h)
@@ -594,10 +613,10 @@ class Skin:
             self.host.resize(self, w, h)
 
     def background_size(self) -> tuple[int, int] | None:
-        """Size of ``Background=`` for BackgroundMode 0 (image defines the window)."""
+        """Size of the ``Background=`` image (modes 0, 3 and 4 use an image)."""
         bg = self.rm.get("background")
         mode = self.rm.get_int("backgroundmode", 0 if bg else 1)
-        if not bg or mode != 0:
+        if not bg or mode not in (0, 3, 4):
             return None
         from raintux.meters.images import load_image
 
@@ -605,12 +624,12 @@ class Skin:
         return (img.width, img.height) if img else None
 
     def path(self, value: str) -> Path:
-        """Resolve a skin path option (relative paths are relative to the skin folder)."""
-        p = value.strip().strip('"').replace("\\", "/")
-        if len(p) >= 2 and p[1] == ":":  # "C:/..." from a Windows skin — keep only the tail
-            p = p[2:]
-        path = Path(os.path.expanduser(p))
-        return path if path.is_absolute() else self.root / path
+        """Resolve a skin path option: relative to the skin folder, backslashes and
+        file-name case as Windows would accept them."""
+        from raintux.core.paths import resolve_ci, windows_to_posix
+
+        path = Path(os.path.expanduser(windows_to_posix(value)))
+        return resolve_ci(path if path.is_absolute() else self.root / path)
 
     def draw(self, cr: Any) -> None:
         """Paint background and visible meters onto a Cairo context."""
@@ -1137,7 +1156,13 @@ class Skin:
         if getattr(cursor_meter, "accepts_input", False):
             cursor = "text"
         elif cursor_meter is not None and cursor_meter.get_bool("mouseactioncursor", self.rm.get_bool("mouseactioncursor", True)):
-            cursor = _cursor_name(cursor_meter.get("mouseactioncursorname", "hand"))
+            name = cursor_meter.get("mouseactioncursorname", "hand").strip()
+            custom = self.resources / "Cursors" / name
+            if "." in name and not name.lower().endswith(".ani"):
+                custom_path = self.path(str(custom))
+                cursor = ("file:" + str(custom_path)) if custom_path.is_file() else "pointer"
+            else:
+                cursor = _cursor_name(name)
         tip = None
         if tooltip_meter is not None and not self.rm.get_bool("tooltiphidden"):
             tip = tooltip_meter.get("tooltiptext").replace("#CRLF#", "\n")

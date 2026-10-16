@@ -271,26 +271,30 @@ class Meter(Section):
         """Meter rectangle (x, y, w, h) including padding; strings shift it for alignment."""
         return (self.x, self.y, self.w, self.h)
 
+    def visible_size(self) -> tuple[float, float]:
+        """Rainmeter's GetW()/GetH(): 0 while hidden (relative positions and window size use it)."""
+        return (0.0, 0.0) if self.hidden else (self.w, self.h)
+
     def layout(self) -> None:
+        """Rainmeter positioning: ``r`` = previous meter's X/Y, ``R`` = its X/Y plus its W/H
+        (anchor positions, so right-aligned text measures from its anchor); absolute positions of
+        contained meters are offset by the container."""
         prev = self.relative_to
         if prev is not None:
-            px, py, pw, ph = prev.box()
             ax, ay = prev.x, prev.y
+            pw, ph = prev.visible_size()
         else:
-            px = py = pw = ph = ax = ay = 0.0
+            ax = ay = pw = ph = 0.0
         res = self.skin.measure_number
-        self.x = parse_coord(self.x_spec, ax, px + pw, 0, res)
-        self.y = parse_coord(self.y_spec, ay, py + ph, 0, res)
+        self.x = parse_coord(self.x_spec, ax, ax + pw, 0, res)
+        self.y = parse_coord(self.y_spec, ay, ay + ph, 0, res)
         if self.container_name:
             cont = self.skin.meter(self.container_name)
             if cont is not None and cont is not self:
-                cx, cy, _cw, _ch = cont.box()
-                if not (prev is not None and prev.container_name == self.container_name and
-                        self.x_spec.strip().endswith(("r", "R"))):
-                    self.x += cx
-                if not (prev is not None and prev.container_name == self.container_name and
-                        self.y_spec.strip().endswith(("r", "R", "b", "B"))):
-                    self.y += cy
+                if not self.x_spec.strip().endswith(("r", "R")):
+                    self.x += cont.x
+                if not self.y_spec.strip().endswith(("r", "R", "b", "B")):
+                    self.y += cont.y
 
     # -- mouse -----------------------------------------------------------------
     def mouse_action(self, name: str) -> str:

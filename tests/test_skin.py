@@ -271,4 +271,5 @@ def test_input_rects_follow_meters(tmp_path: Path) -> None:
         Hidden=1
     """)
     assert skin.input_rects() == [(5, 5, 10, 10)]
-    assert (skin.width, skin.height) == (15, 15)
+    # Rainmeter sizes the window over hidden meters too (at width 0): X=50 still counts.
+    assert (skin.width, skin.height) == (50, 15)
