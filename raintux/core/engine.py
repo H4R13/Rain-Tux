@@ -7,14 +7,14 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("PangoCairo", "1.0")
-from gi.repository import Gio, Gtk
+from gi.repository import Gio, GLib, Gtk
 
 from raintux.core.config import RainTuxConfig, default_skins_roots, load_config
 from raintux.core.event_bus import EventBus
@@ -27,6 +27,32 @@ from raintux.wayland.kde_backend import create_kde_overlay
 from raintux.wayland.wlr_backend import create_overlay_window
 
 log = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+def _on_main_thread(fn: Callable[..., _T], *args: Any, timeout: float = 30.0) -> _T:
+    """Run ``fn`` on the GTK main loop and wait for its result (direct call if already there)."""
+    if GLib.MainContext.default().is_owner():
+        return fn(*args)
+    done = threading.Event()
+    box: dict[str, Any] = {}
+
+    def _run() -> bool:
+        try:
+            box["result"] = fn(*args)
+        except BaseException as e:  # re-raised in the calling thread
+            box["error"] = e
+        finally:
+            done.set()
+        return GLib.SOURCE_REMOVE
+
+    GLib.idle_add(_run)
+    if not done.wait(timeout):
+        raise TimeoutError(f"GTK main loop did not run {getattr(fn, '__name__', fn)}")
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
 
 
 def _skin_bounds(layouts: list[Any]) -> tuple[int, int]:
@@ -102,19 +128,34 @@ class RainTuxEngine:
             def _idle() -> None:
                 runtime.window.invalidate()
 
-            GLib = gi.repository.GLib
             GLib.idle_add(_idle)
 
         return _notify
 
     def load_skin(self, skin_id: str, ini_path: Path | None = None) -> None:
-        """Load a skin by id (relative path) or explicit ``.ini`` path."""
+        """Load a skin by id (relative path) or explicit ``.ini`` path; reloads if already loaded.
+
+        Safe to call from any thread: GTK work is marshalled onto the main loop.
+        """
+        _on_main_thread(self._load_skin, skin_id, ini_path)
+
+    def unload_skin(self, skin_id: str) -> None:
+        _on_main_thread(self._unload_skin, skin_id)
+
+    def reload_skin(self, skin_id: str) -> None:
+        _on_main_thread(self._reload_skin, skin_id)
+
+    def _load_skin(self, skin_id: str, ini_path: Path | None) -> None:
         path = ini_path or self.resolve_ini(skin_id)
         if not path or not path.is_file():
             raise FileNotFoundError(skin_id)
         skin_key = skin_id
         parsed = parse_skin_ini(path)
         layouts = compute_layout(parsed)
+        old = self.skins.pop(skin_key, None)
+        if old:
+            # Measures are rebuilt below (load_skin_measures_threadsafe clears the old ones).
+            old.window.close()
         w, h = _skin_bounds(layouts)
         win = self._new_overlay(title=skin_key, width=w, height=h, skin_id=skin_key)
         runtime = SkinRuntime(skin_id=skin_key, ini_path=path, parsed=parsed, window=win, layouts=layouts)
@@ -139,7 +180,7 @@ class RainTuxEngine:
         self.measure_manager.load_skin_measures_threadsafe(skin_key, parsed, notify)
         log.info("loaded skin %s from %s", skin_key, path)
 
-    def unload_skin(self, skin_id: str) -> None:
+    def _unload_skin(self, skin_id: str) -> None:
         rt = self.skins.pop(skin_id, None)
         if not rt:
             return
@@ -147,26 +188,26 @@ class RainTuxEngine:
         if self._async_loop:
             self._async_loop.call_soon_threadsafe(lambda: self.measure_manager.clear_skin(skin_id))
 
-    def reload_skin(self, skin_id: str) -> None:
-        if skin_id not in self.skins:
-            self.load_skin(skin_id)
-            return
-        rt = self.skins.pop(skin_id)
-        rt.window.close()
-        self.load_skin(skin_id, rt.ini_path)
+    def _reload_skin(self, skin_id: str) -> None:
+        rt = self.skins.get(skin_id)
+        self._load_skin(skin_id, rt.ini_path if rt else None)
+
+    def _skin_roots(self) -> list[Path]:
+        roots = [Path(r).expanduser() for r in self.config.engine.skins_roots]
+        return roots + [b for b in default_skins_roots() if b not in roots]
 
     def resolve_ini(self, skin_id: str) -> Path | None:
-        """Locate ``skin_id`` under configured roots (first match)."""
+        """Locate ``skin_id`` under configured roots (first match); never outside them."""
         sid = skin_id.replace("\\", "/").strip("/")
-        for root in self.config.engine.skins_roots:
-            base = Path(root).expanduser()
-            cand = base / sid
-            if cand.is_file() and cand.suffix.lower() == ".ini":
-                return cand
-            if (cand / "skin.ini").is_file():
-                return cand / "skin.ini"
-        for base in default_skins_roots():
-            cand = base / sid
+        for base in self._skin_roots():
+            try:
+                base_r = base.resolve()
+            except OSError:
+                continue
+            cand = (base / sid).resolve()
+            if not cand.is_relative_to(base_r):
+                log.warning("rejected skin id outside %s: %r", base, skin_id)
+                continue
             if cand.is_file() and cand.suffix.lower() == ".ini":
                 return cand
             if (cand / "skin.ini").is_file():

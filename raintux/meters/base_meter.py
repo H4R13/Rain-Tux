@@ -47,25 +47,24 @@ def substitute_measures(text: str, get_measure: Any) -> str:
     return re.sub(r"\[([^\]]+)\]", repl, text)
 
 
-def parse_coord(value: str, axis: str, prev_right: int, prev_bottom: int, fallback: int = 0) -> int:
+def parse_coord(value: str, prev_pos: int, prev_end: int, fallback: int = 0) -> int:
     """
     Parse Rainmeter ``X`` / ``Y``.
 
-    ``X=…R`` is relative to the previous meter's **right** edge; ``Y=…B`` to its
-    **bottom** edge (Rainmeter semantics).
+    ``…R`` (or ``…B`` for Y) is relative to the previous meter's right / bottom
+    edge (``prev_end``); lower-case ``…r`` (or ``…b``) is relative to the previous
+    meter's own X / Y (``prev_pos``). Unparseable values return ``fallback``.
     """
     value = value.strip()
-    if axis == "x" and value.endswith(("R", "r")):
-        prefix = value[:-1]
-        off = int(float(prefix)) if prefix else 0
-        return prev_right + off
-    if axis == "y" and value.endswith(("B", "b")):
-        prefix = value[:-1]
-        off = int(float(prefix)) if prefix else 0
-        return prev_bottom + off
+    base = 0
+    if value.endswith(("R", "B")):
+        base, value = prev_end, value[:-1]
+    elif value.endswith(("r", "b")):
+        base, value = prev_pos, value[:-1]
     try:
-        return int(float(value))
+        return base + (int(float(value)) if value else 0)
     except ValueError:
+        log.debug("unparseable coordinate %r", value)
         return fallback
 
 

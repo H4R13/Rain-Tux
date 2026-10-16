@@ -213,6 +213,7 @@ def begin_first_run_or_skip(app: Gtk.Application, on_done: Callable[[bool], None
     win.set_title("RainTux")
     win.set_resizable(False)
     win.set_modal(True)
+    win.add_css_class("raintux-splash")
 
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
     win.set_child(outer)
@@ -232,8 +233,8 @@ def begin_first_run_or_skip(app: Gtk.Application, on_done: Callable[[bool], None
     css = Gtk.CssProvider.new()
     css.load_from_string(
         """
-        window { background: #000000; }
-        label { color: white; font-weight: 700; font-size: 13pt;
+        window.raintux-splash { background: #000000; }
+        window.raintux-splash label { color: white; font-weight: 700; font-size: 13pt;
           background: #1a237e; padding: 6px 14px; border-radius: 6px; }
         """
     )
@@ -260,6 +261,7 @@ def begin_first_run_or_skip(app: Gtk.Application, on_done: Callable[[bool], None
         img.set_from_icon_name("emblem-default-symbolic")
 
     def show_eula() -> None:
+        Gtk.StyleContext.remove_provider_for_display(win.get_display(), css)
         win.destroy()
         _show_eula_dialog(app, on_done)
 

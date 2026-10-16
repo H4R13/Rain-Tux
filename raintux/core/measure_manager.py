@@ -120,6 +120,16 @@ class MeasureManager:
             return ""
         return m.display_string()
 
+    def _skin_update_ms(self, parsed: ParsedSkin) -> int:
+        """``[Rainmeter] Update=`` in milliseconds (configparser lower-cases keys)."""
+        raw = {k.lower(): v for k, v in parsed.rainmeter.items()}.get("update")
+        if raw:
+            try:
+                return max(50, int(float(substitute_variables(raw, parsed.variables, parsed.root))))
+            except ValueError:
+                log.warning("bad Update=%r in %s", raw, parsed.ini_path)
+        return self._default_interval_ms
+
     def _parse_interval(self, section: dict[str, str], parsed: ParsedSkin) -> int:
         raw = {k.lower(): v for k, v in section.items()}
         if "updaterate" in raw:
@@ -128,19 +138,11 @@ class MeasureManager:
                 return max(50, ms)
             except ValueError:
                 pass
+        base = self._skin_update_ms(parsed)
         if "updatedivider" in raw:
             try:
                 div = int(substitute_variables(raw["updatedivider"], parsed.variables, parsed.root))
-                base = int(parsed.rainmeter.get("Update", self._default_interval_ms // 1000))
-                return max(50, base * 1000 * max(1, div))
+                return max(50, base * max(1, div))
             except ValueError:
                 pass
-        rm_update = parsed.rainmeter.get("Update")
-        if rm_update:
-            try:
-                v = float(substitute_variables(rm_update, parsed.variables, parsed.root))
-                ms = int(v if v > 10 else v * 1000)
-                return max(50, ms)
-            except ValueError:
-                pass
-        return self._default_interval_ms
+        return base

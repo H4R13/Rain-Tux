@@ -82,8 +82,8 @@ def _merge_ini_into_parser(parser: configparser.ConfigParser, path: Path, stack:
         for key, value in items:
             if not _is_include_key(key):
                 continue
-            expanded = substitute_variables(value.strip(), dict(parser.items("Variables", raw=True))) if parser.has_section("Variables") else value.strip()
-            expanded = substitute_variables(expanded, {}, path.parent)
+            variables = dict(parser.items("Variables", raw=True)) if parser.has_section("Variables") else {}
+            expanded = substitute_variables(value.strip(), variables, path.parent)
             inc = (path.parent / expanded).resolve()
             if inc.is_file():
                 include_paths.append(inc)

@@ -34,6 +34,24 @@ else:
         log.info("Gtk4LayerShell not available; using a normal GTK window (no desktop layer).")
 
 
+_css_installed = False
+
+
+def _install_css_once() -> None:
+    """Add the transparent-window stylesheet to the display a single time."""
+    global _css_installed
+    if _css_installed:
+        return
+    css = Gtk.CssProvider.new()
+    css.load_from_string("window.raintux-skin { background: transparent; }")
+    Gtk.StyleContext.add_provider_for_display(
+        Gdk.Display.get_default(),
+        css,
+        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+    )
+    _css_installed = True
+
+
 class LayerShellWindow(Gtk.ApplicationWindow):
     """
     Transparent `` Gtk.ApplicationWindow`` with optional layer-shell placement.
@@ -60,13 +78,8 @@ class LayerShellWindow(Gtk.ApplicationWindow):
         self.set_resizable(False)
         self.set_default_size(width, height)
 
-        css = Gtk.CssProvider.new()
-        css.load_from_string("window { background: transparent; }")
-        Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(),
-            css,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
-        )
+        self.add_css_class("raintux-skin")
+        _install_css_once()
 
         area = Gtk.DrawingArea()
         area.set_content_width(width)
