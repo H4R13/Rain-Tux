@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "raintux"
-version = "0.1.0"
-description = "Rainmeter-style desktop overlays for Linux Wayland"
+version = "0.9.0"
+description = "Rainmeter-compatible desktop skins for Linux (Wayland)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
