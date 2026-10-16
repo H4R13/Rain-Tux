@@ -181,3 +181,28 @@ def show_context_menu(engine: RainTuxEngine, window: SkinWindow, x: float, y: fl
 
     pop.connect("closed", closed)
     pop.popup()
+
+
+def show_custom_menu(engine: RainTuxEngine, window: SkinWindow, x: float, y: float) -> None:
+    """``!SkinCustomMenu``: only the skin's ContextTitle / ContextAction items."""
+    skin = window.skin
+    items = skin.context_items()
+    if not items:
+        return
+    group = Gio.SimpleActionGroup()
+    menu = Gio.Menu()
+    for i, (label, _act) in enumerate(items):
+        if label.strip("-"):
+            menu.append_item(_item(label, "custom.run", GLib.Variant("i", i)))
+    a = Gio.SimpleAction.new("run", GLib.VariantType.new("i"))
+    a.connect("activate", lambda _a, v: skin.execute(items[v.get_int32()][1], skin.rm))
+    group.add_action(a)
+    window.insert_action_group("custom", group)
+    pop = Gtk.PopoverMenu.new_from_model(menu)
+    pop.set_parent(window.area)
+    pop.set_has_arrow(False)
+    rect = Gdk.Rectangle()
+    rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+    pop.set_pointing_to(rect)
+    pop.connect("closed", lambda p: GLib.idle_add(lambda: (p.unparent(), False)[1]))
+    pop.popup()

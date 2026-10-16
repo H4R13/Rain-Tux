@@ -6,7 +6,7 @@ import logging
 import math
 import re
 from collections import deque
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from raintux.core.formula import FormulaError, evaluate
 from raintux.core.section import Section
@@ -17,6 +17,17 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _SCALES = ["", "k", "M", "G", "T", "P"]
+_EXECUTOR: Any = None
+
+
+def _executor() -> Any:
+    """Shared worker pool for blocking plugin work (HTTP, subprocesses, D-Bus)."""
+    global _EXECUTOR
+    if _EXECUTOR is None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        _EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="raintux-measure")
+    return _EXECUTOR
 
 
 def format_number(
@@ -63,8 +74,13 @@ def _parse_substitute(spec: str) -> list[tuple[str, str]]:
 
 
 def pcre_to_python(pattern: str) -> str:
-    """Rainmeter patterns are PCRE; drop the possessive quantifiers Python's ``re`` lacks."""
-    return re.sub(r"([*+?}])\+", r"\1", pattern)
+    """Rainmeter patterns are PCRE (``(?siU)``, ``(?<name>…)``); see :mod:`raintux.core.pcre`."""
+    from raintux.core.pcre import to_python
+
+    try:
+        return to_python(pattern)
+    except re.error:
+        return pattern
 
 
 class Measure(Section):
@@ -120,6 +136,21 @@ class Measure(Section):
 
     def update_value(self) -> None:
         """Set ``self._raw_number`` and optionally ``self.string``."""
+
+    def run_in_background(self, work: Any, done: Any) -> None:
+        """Run blocking ``work()`` in a worker thread, then ``done(result)`` on the main loop.
+
+        ``done`` receives an Exception instance when ``work`` raised.
+        """
+
+        def job() -> None:
+            try:
+                result = work()
+            except Exception as e:  # handed to ``done``
+                result = e
+            self.skin.host.call_soon(lambda: None if self.skin.closed else done(result))
+
+        _executor().submit(job)
 
     def command(self, args: str) -> None:
         """``!CommandMeasure`` target."""

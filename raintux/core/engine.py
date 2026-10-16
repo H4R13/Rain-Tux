@@ -24,7 +24,7 @@ from raintux.core.formula import parse_number
 from raintux.core.skin import Skin
 from raintux.core.state import AppState, load_state, save_state
 from raintux.wayland.compositor_detect import CompositorKind, detect_compositor
-from raintux.wayland.layer_window import SkinWindow, layer_shell_available, monitor_at, monitors
+from raintux.wayland.layer_window import CaptureOverlay, SkinWindow, monitor_at, monitors
 
 log = logging.getLogger(__name__)
 
@@ -481,6 +481,50 @@ class RainTuxEngine:
         if (area.get_tooltip_text() or None) != tooltip:
             area.set_tooltip_text(tooltip)
 
+    def all_skins(self) -> list[Skin]:
+        return [a.skin for a in self.active.values()]
+
+    def set_keyboard_focus(self, skin: Skin, want: bool) -> None:
+        act = self._act(skin)
+        if act is not None:
+            act.window.set_keyboard(want)
+
+    def clipboard_set(self, text: str) -> None:
+        display = Gdk.Display.get_default()
+        if display is not None:
+            display.get_clipboard().set(text)
+
+    def clipboard_get(self, callback: Callable[[str], Any]) -> None:
+        display = Gdk.Display.get_default()
+        if display is None:
+            return
+        cb = display.get_clipboard()
+
+        def done(c: Any, res: Gio.AsyncResult) -> None:
+            try:
+                text = c.read_text_finish(res)
+            except GLib.Error:
+                text = None
+            if text:
+                callback(text)
+
+        cb.read_text_async(None, done)
+
+    def start_mouse_capture(self, skin: Skin, measure: Any) -> None:
+        self._captures = getattr(self, "_captures", {})
+        self._captures[id(measure)] = CaptureOverlay(self.app, skin, measure)
+
+    def stop_mouse_capture(self, skin: Skin, measure: Any) -> None:
+        ov = getattr(self, "_captures", {}).pop(id(measure), None)
+        if ov is not None:
+            ov.destroy()
+
+    def ask_text(self, skin: Skin, rect: tuple[float, float, float, float], style: dict[str, Any], default: str,
+                 password: bool, callback: Callable[[str | None], None]) -> None:
+        from raintux.gui.input_popup import ask_text
+
+        ask_text(self.app, skin, rect, style, default, password, callback)
+
     def run_command(self, skin: Skin, command: str) -> None:
         """Run a non-bang action: URLs and files open with the default app, programs start detached."""
         args = split_args(command)
@@ -620,11 +664,52 @@ class RainTuxEngine:
                 display.get_clipboard().set(args[0])
         elif name == "setwallpaper" and args:
             set_wallpaper(skin.path(args[0]))
-        elif name in ("showgroup", "hidegroup", "togglegroup") and args:
+        elif name in ("showgroup", "hidegroup", "togglegroup", "showfadegroup", "hidefadegroup", "togglefadegroup") and args:
             for a in self._group(args[0]):
                 self.host_bang(a.skin, name[:-5], [])
+        elif name in ("updategroup", "redrawgroup") and args:
+            for a in self._group(args[0]):
+                a.skin.bang(name[:-5], [])
+        elif name in ("disablemouseactionskingroup", "enablemouseactionskingroup", "togglemouseactionskingroup",
+                      "clearmouseactionskingroup") and len(args) >= 2:
+            local = name.replace("skingroup", "")
+            for a in self._group(args[1]):
+                a.skin.bang(local, ["*", args[0]])
+        elif name == "setzoomfactor" and args:
+            for a in target(1):
+                raw = args[0].strip()
+                cur = a.window.zoom
+                val = parse_number(raw.lstrip("+"), cur)
+                a.window.set_zoom(cur + val if raw.startswith(("+", "-")) else val)
+        elif name == "skincustommenu":
+            for a in target(0):
+                from raintux.gui.context_menu import show_custom_menu
+
+                show_custom_menu(self, a.window, 10, 10)
+        elif name == "restart":
+            GLib.idle_add(lambda: (self._restart(), GLib.SOURCE_REMOVE)[1])
+        elif name == "debug":
+            self.show_manage()
+        elif name == "sendkey" and args:
+            from raintux.measures.plugins.media import MediaKeyPlugin
+
+            keymap = {"medianexttrack": "nexttrack", "mediaprevtrack": "prevtrack", "mediastop": "stop",
+                      "mediaplaypause": "playpause", "volumemute": "volumemute", "volumedown": "volumedown",
+                      "volumeup": "volumeup"}
+            key = keymap.get(args[0].strip().lower())
+            if key:
+                MediaKeyPlugin.command(MediaKeyPlugin.__new__(MediaKeyPlugin), key)
+        elif name in ("autoselectscreen", "autoselectscreengroup", "forceenablevisiblemode", "lsboxhook",
+                      "showblur", "hideblur", "toggleblur", "addblur", "removeblur", "resetstats", "setanchor"):
+            log.debug("!%s has no effect on Linux", name)
         else:
             log.info("!%s is not supported on this platform", name)
+
+    def _restart(self) -> None:
+        import sys
+
+        self.shutdown()
+        os.execv(sys.executable, [sys.executable, "-m", "raintux"])
 
     def _safe_activate(self, config: str, file: str | None) -> None:
         try:

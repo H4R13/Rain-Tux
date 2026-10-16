@@ -44,6 +44,32 @@ HOST_BANGS = {
     "loadlayout", "showblur", "hideblur", "toggleblur", "addblur", "removeblur", "zposgroup",
     "draggablegroup", "clickthroughgroup", "keeponscreengroup", "snapedgesgroup",
     "settransparencygroup", "fadedurationgroup", "setclip", "resetstats", "lsboxhook",
+    "setzoomfactor", "autoselectscreen", "autoselectscreengroup", "restart", "debug", "skincustommenu",
+    "updategroup", "redrawgroup", "showfadegroup", "hidefadegroup", "togglefadegroup", "sendkey",
+    "disablemouseactionskingroup", "enablemouseactionskingroup", "togglemouseactionskingroup",
+    "clearmouseactionskingroup", "forceenablevisiblemode",
+}
+
+# "!Skin:Load" style aliases (current Rainmeter).
+SKIN_ALIASES = {"skin:load": "activateconfig", "skin:unload": "deactivateconfig", "skin:toggle": "toggleconfig",
+                "skin:edit": "editskin"}
+
+# Section bangs registered by measures/meters ("!ActionTimer:Execute 1"): name -> argument count
+# (one extra leading argument names the section, or "Group=Name"; otherwise the current section).
+SECTION_BANGS: dict[str, int] = {
+    "actiontimer:execute": 1, "actiontimer:stop": 1,
+    "audio:setvolume": 1, "audio:setoutputindex": 1, "audio:mute": 0, "audio:unmute": 0, "audio:togglemute": 0,
+    "recyclemanager:emptybin": 0, "recyclemanager:emptybinsilent": 0, "recyclemanager:openbin": 0,
+    "loop:reset": 0, "mouse:startcapture": 0, "mouse:stopcapture": 0,
+    "webparser:refetch": 0, "webparser:clearresults": 0,
+    "runcommand:run": 0, "runcommand:close": 0, "runcommand:kill": 0,
+    "nowplaying:play": 0, "nowplaying:pause": 0, "nowplaying:toggleplay": 0, "nowplaying:stop": 0,
+    "nowplaying:next": 0, "nowplaying:previous": 0, "nowplaying:openplayer": 0, "nowplaying:closeplayer": 0,
+    "nowplaying:toggleplayer": 0, "nowplaying:setposition": 1, "nowplaying:setrating": 1,
+    "nowplaying:setvolume": 1, "nowplaying:setshuffle": 1, "nowplaying:setrepeat": 1,
+    "textedit:focus": 0, "textedit:submit": 0, "textedit:select": 2, "textedit:selectall": 0,
+    "textedit:settext": 1, "textedit:scrollbyline": 1, "textedit:resetscroll": 0, "textedit:clear": 0,
+    "textedit:reset": 0, "inputtext:executebatch": 1, "windowmessage:send": 3,
 }
 
 # Bangs whose optional last argument is a parameter rather than a config name.
@@ -59,7 +85,10 @@ _LOCAL_ARGC: dict[str, int] = {
     "disablemeasuregroup": 1, "togglemeasuregroup": 1, "pausemeasure": 1, "unpausemeasure": 1,
     "togglepausemeasure": 1, "pausemeasuregroup": 1, "unpausemeasuregroup": 1,
     "togglepausemeasuregroup": 1, "commandmeasure": 2, "pluginbang": 1, "movemeter": 3,
-    "log": 1, "execute": 1, "delay": 1,
+    "log": 1, "execute": 1, "delay": 1, "setupdate": 1, "commandmeasuregroup": 2,
+    "disablemouseaction": 2, "enablemouseaction": 2, "togglemouseaction": 2, "clearmouseaction": 2,
+    "disablemouseactiongroup": 2, "enablemouseactiongroup": 2, "togglemouseactiongroup": 2,
+    "clearmouseactiongroup": 2,
 }
 
 
@@ -76,6 +105,8 @@ class SkinHost(Protocol):
     def find_skin(self, config: str) -> Skin | None: ...
     def screen_variables(self, skin: Skin) -> dict[str, str]: ...
     def set_pointer(self, skin: Skin, cursor: str | None, tooltip: str | None) -> None: ...
+    def ask_text(self, skin: Skin, rect: tuple[float, float, float, float], style: dict[str, Any], default: str,
+                 password: bool, callback: Callable[[str | None], None]) -> None: ...
 
 
 class NullHost:
@@ -89,6 +120,11 @@ class NullHost:
         self.redraws = 0
         self.skins: dict[str, Skin] = {}
         self.pointer: tuple[str | None, str | None] = (None, None)
+        self.prompts: list[tuple[Any, str, Callable[[str | None], None]]] = []
+        self._soon: list[Callable[[], None]] = []
+        import threading
+
+        self._lock = threading.Lock()
 
     def redraw(self, skin: Skin) -> None:
         self.redraws += 1
@@ -111,7 +147,28 @@ class NullHost:
             fn()
 
     def call_soon(self, fn: Callable[[], None]) -> None:
-        fn()
+        with self._lock:
+            self._soon.append(fn)
+
+    def drain(self, timeout: float = 0.0) -> int:
+        """Run callbacks queued by worker threads, waiting up to ``timeout`` s for the first."""
+        import time
+
+        deadline = time.monotonic() + timeout
+        ran = 0
+        while True:
+            with self._lock:
+                batch, self._soon = self._soon, []
+            for fn in batch:
+                fn()
+                ran += 1
+            if ran or time.monotonic() >= deadline:
+                return ran
+            time.sleep(0.01)
+
+    def ask_text(self, skin: Skin, rect: tuple[float, float, float, float], style: dict[str, Any], default: str,
+                 password: bool, callback: Callable[[str | None], None]) -> None:
+        self.prompts.append((rect, default, callback))
 
     def run_command(self, skin: Skin, command: str) -> None:
         self.commands.append(" ".join(split_args(command)))
@@ -205,6 +262,10 @@ class Skin:
         self._pressed_button: Meter | None = None
         self._builtins_cache: dict[str, str] | None = None
         self.on_size_changed: Callable[[int, int], None] | None = None
+        self._mouse_ctx: tuple[float, float, Any] | None = None
+        self.zoom = 1.0
+        self.focused_input: Any = None  # TextEdit meter holding the caret
+        self._selecting_input: Any = None  # TextEdit being drag-selected
 
     # ------------------------------------------------------------------ loading
     def load(self) -> None:
@@ -329,7 +390,7 @@ class Skin:
                 out = self.replace_section_variables(out)
         return out
 
-    def replace_section_variables(self, text: str) -> str:
+    def replace_section_variables(self, text: str, current: Section | None = None) -> str:
         placeholders: list[str] = []
 
         def repl(m: re.Match[str]) -> str:
@@ -337,7 +398,7 @@ class Skin:
             if len(inner) > 2 and inner.startswith("*") and inner.endswith("*"):
                 placeholders.append("[" + inner[1:-1] + "]")
                 return f"\0{len(placeholders) - 1}\0"
-            value = self.section_variable(inner)
+            value = self.section_variable(inner, current)
             return m.group(0) if value is None else value
 
         out = text
@@ -350,12 +411,22 @@ class Skin:
             out = re.sub(r"\0(\d+)\0", lambda m: placeholders[int(m.group(1))], out)
         return out
 
-    def section_variable(self, spec: str) -> str | None:
-        """Value for ``[Name]``, ``[Name:]``, ``[Name:%,1]``, ``[Name:/1024,2]``, ``[Meter:W]``, ``[#Var]``…"""
+    def section_variable(self, spec: str, current: Section | None = None) -> str | None:
+        """Value for ``[Name]``, ``[Name:%,1]``, ``[Name:/1024,2]``, ``[Meter:W]`` and the keyed forms
+        ``[#Var]``, ``[&Measure]`` / ``[&Script:func()]``, ``[%ENV]``, ``[$SkinX]``, ``[$Input]``."""
         if spec.startswith("#"):
             return self.get_variable(spec[1:])
         if spec.startswith("&"):
-            return self._inline_script(spec[1:])
+            rest = spec[1:]
+            name, colon, call = rest.partition(":")
+            m = self.measure(name)
+            if m is not None and colon and "(" in call and hasattr(m, "inline_call"):
+                return self._inline_script(rest)
+            return self.section_variable(rest, current)
+        if spec.startswith("%"):
+            return os.environ.get(spec[1:])
+        if spec.startswith("$"):
+            return self.dollar_variable(spec[1:], current)
         if spec.startswith(("!", "\\")):
             return None
         name, colon, param = spec.partition(":")
@@ -396,6 +467,68 @@ class Skin:
             if key in vals:
                 return trim_number(vals[key])
         return None
+
+    def dollar_variable(self, spec: str, current: Section | None = None) -> str | None:
+        """``[$SkinX]`` / ``[$SkinZoomFactor]`` / ``[$Input]`` / ``[$MouseX]`` (mouse only in mouse actions)."""
+        low = spec.lower()
+        if low.startswith("mouse"):
+            ctx = self._mouse_ctx
+            return self.mouse_variable(spec, ctx[0], ctx[1], ctx[2]) if ctx else None
+        if low.startswith("input"):
+            target = current if current is not None and hasattr(current, "input_variable") else None
+            return target.input_variable(spec[5:]) if target is not None else None  # type: ignore[attr-defined]
+        st = self.state
+        skin_vars = {
+            "skinx": st.x, "skiny": st.y, "skinw": self.width, "skinh": self.height,
+            "skinphysicalx": st.x, "skinphysicaly": st.y, "skinphysicalw": int(self.width * self.zoom),
+            "skinphysicalh": int(self.height * self.zoom), "skinzoomedw": int(self.width * self.zoom),
+            "skinzoomedh": int(self.height * self.zoom), "skinzpos": st.z, "skindpifactor": 1,
+            "skinzoomfactor": self.zoom, "skinvisible": 1,
+        }
+        if low in skin_vars:
+            return trim_number(float(skin_vars[low]))
+        return None
+
+    def mouse_variable(self, spec: str, x: float, y: float, meter: Any) -> str | None:
+        """``MouseX``/``MouseY`` relative to the acting meter (or skin), ``:%`` for percent."""
+        low = spec.lower().replace(" ", "")
+        if low not in ("mousex", "mousey", "mousex:%", "mousey:%"):
+            return None
+        horizontal = low.startswith("mousex")
+        if meter is not None and hasattr(meter, "box"):
+            bx, by, bw, bh = meter.box()
+        else:
+            bx, by, bw, bh = 0.0, 0.0, float(self.width), float(self.height)
+        pos = (x - bx) if horizontal else (y - by)
+        if low.endswith("%"):
+            size = bw if horizontal else bh
+            return str(int((pos + 1) / size * 100)) if size else "0"
+        return str(int(pos))
+
+    def with_mouse_variables(self, action: str, x: float, y: float, meter: Any) -> str:
+        """Replace ``$MouseX$``-style variables (``$*MouseX*$`` escapes) before running a mouse action."""
+        if not action or "$" not in action:
+            return action
+
+        def repl(m: re.Match[str]) -> str:
+            inner = m.group(1)
+            if len(inner) > 2 and inner.startswith("*") and inner.endswith("*"):
+                return "$" + inner[1:-1] + "$"
+            v = self.mouse_variable(inner, x, y, meter)
+            return m.group(0) if v is None else v
+
+        return re.sub(r"\$([^$\s\[\]]+)\$", repl, action)
+
+    def run_mouse_action(self, action: str, x: float, y: float, meter: Any, source: Section) -> None:
+        """Execute a mouse action with ``$MouseX$`` / ``[$MouseX]`` bound to this event."""
+        if not action:
+            return
+        prev = self._mouse_ctx
+        self._mouse_ctx = (x, y, meter)
+        try:
+            self.execute(self.with_mouse_variables(action, x, y, meter), source)
+        finally:
+            self._mouse_ctx = prev
 
     def _inline_script(self, spec: str) -> str | None:
         """``[&ScriptMeasure:func('arg')]`` → call into a Lua script measure."""
@@ -512,7 +645,7 @@ class Skin:
             for i, cmd in enumerate(commands):
                 if self.closed:
                     return
-                cmd = self.replace_section_variables(cmd)
+                cmd = self.replace_section_variables(cmd, source)
                 if cmd.startswith("!"):
                     args = split_args(cmd[1:])
                     if not args:
@@ -536,6 +669,14 @@ class Skin:
 
     def bang(self, name: str, args: list[str], source: Section | None = None) -> None:
         """Dispatch one bang (``name`` lower-case, without ``!``)."""
+        if name in SKIN_ALIASES:
+            name = SKIN_ALIASES[name]
+        if ":" in name:
+            if name.startswith("skin:"):
+                self._skin_prefixed_bang(name[5:], args)
+            else:
+                self._section_bang(name, args, source)
+            return
         if name in HOST_BANGS:
             self.host.host_bang(self, name, args)
             return
@@ -564,6 +705,58 @@ class Skin:
             log.warning("!%s needs %d argument(s): %r", name, argc, args)
             return
         getattr(self, "_bang_" + name)(*args[:argc])
+
+    def _section_bang(self, name: str, args: list[str], source: Section | None) -> None:
+        """``!Type:Action [Section|Group=Name] args…`` handled by the section's ``command``."""
+        argc = SECTION_BANGS.get(name)
+        if argc is None:
+            log.warning("unknown bang !%s in %s", name, self.config)
+            return
+        namespace, _sep, action = name.partition(":")
+        targets: list[Section] = []
+        if len(args) > argc:
+            target, args = args[0], args[1:]
+            if target.lower().startswith("group="):
+                targets = self._group(target[6:], meters=True, measures=True)
+            else:
+                sec = self.section(target)
+                if sec is None:
+                    log.warning("!%s: [%s] not found in %s", name, target, self.config)
+                    return
+                targets = [sec]
+        elif source is not None:
+            targets = [source]
+        else:
+            log.warning("!%s: section name required", name)
+            return
+        for sec in targets:
+            if getattr(sec, "bang_namespace", None) != namespace:
+                log.warning("!%s: invalid bang for [%s]", name, sec.name)
+                continue
+            sec.command(" ".join([action, *args]).strip())  # type: ignore[attr-defined]
+
+    def _skin_prefixed_bang(self, bang: str, args: list[str]) -> None:
+        """``!Skin:Refresh "Config"`` / ``"Group=Name"``: run ``bang`` on other skins."""
+        if not args:
+            log.warning("!Skin:%s needs a config name", bang)
+            return
+        target, rest = args[0], args[1:]
+        skins: list[Skin] = []
+        if target.lower().startswith("group="):
+            group = target[6:].strip().lower()
+            all_skins = getattr(self.host, "all_skins", None)
+            skins = [s for s in (all_skins() if all_skins else [self]) if group in s.config_groups()]
+        else:
+            other = self.host.find_skin(target)
+            if other is None:
+                log.info("!Skin:%s: config %r is not active", bang, target)
+            else:
+                skins = [other]
+        for sk in skins:
+            sk.bang(bang.lower(), rest, None)
+
+    def config_groups(self) -> set[str]:
+        return {g.strip().lower() for g in self.rm.get("group").split("|") if g.strip()}
 
     def _evaluated(self, value: str) -> str:
         v = value.strip()
@@ -705,6 +898,51 @@ class Skin:
     def _bang_execute(self, actions: str) -> None:
         self.execute(actions)
 
+    def _bang_setupdate(self, value: str) -> None:
+        self.rm.set_option("update", value)
+        self.rm.read()
+
+    def _bang_commandmeasuregroup(self, args: str, group: str) -> None:
+        for m in self._group(group, measures=True):
+            m.command(args)  # type: ignore[attr-defined]
+
+    def _mouse_action_change(self, meters: Any, actions: str, mode: str) -> None:
+        names = [a.strip().lower() for a in actions.split("|") if a.strip()]
+        for mt in meters:
+            for a in names:
+                if mode == "disable":
+                    mt.disabled_actions.add(a)
+                elif mode == "enable":
+                    mt.disabled_actions.discard(a)
+                elif mode == "toggle":
+                    mt.disabled_actions ^= {a}
+                else:
+                    mt.cleared_actions.add(a)
+
+    def _bang_disablemouseaction(self, meter: str, actions: str) -> None:
+        self._mouse_action_change(self._targets(meter, self.meters), actions, "disable")
+
+    def _bang_enablemouseaction(self, meter: str, actions: str) -> None:
+        self._mouse_action_change(self._targets(meter, self.meters), actions, "enable")
+
+    def _bang_togglemouseaction(self, meter: str, actions: str) -> None:
+        self._mouse_action_change(self._targets(meter, self.meters), actions, "toggle")
+
+    def _bang_clearmouseaction(self, meter: str, actions: str) -> None:
+        self._mouse_action_change(self._targets(meter, self.meters), actions, "clear")
+
+    def _bang_disablemouseactiongroup(self, group: str, actions: str) -> None:
+        self._mouse_action_change(self._group(group, meters=True), actions, "disable")
+
+    def _bang_enablemouseactiongroup(self, group: str, actions: str) -> None:
+        self._mouse_action_change(self._group(group, meters=True), actions, "enable")
+
+    def _bang_togglemouseactiongroup(self, group: str, actions: str) -> None:
+        self._mouse_action_change(self._group(group, meters=True), actions, "toggle")
+
+    def _bang_clearmouseactiongroup(self, group: str, actions: str) -> None:
+        self._mouse_action_change(self._group(group, meters=True), actions, "clear")
+
     def _targets(self, name: str, items: Any) -> list[Any]:
         n = name.strip().lower()
         if n == "*":
@@ -729,34 +967,73 @@ class Skin:
         return None
 
     def mouse(self, kind: str, x: float = -1, y: float = -1, button: str = "left") -> bool:
-        """Deliver pointer input. Returns True when an action (or button) consumed it.
+        """Deliver pointer input. Returns True when the skin consumed it (no window drag).
 
-        ``kind``: ``move``, ``leave``, ``down``, ``up``, ``double``, ``scrollup``,
-        ``scrolldown``, ``scrollleft``, ``scrollright``.
+        ``kind``: ``move``, ``drag`` (motion with a button held), ``leave``, ``down``, ``up``,
+        ``double``, ``scrollup``, ``scrolldown``, ``scrollleft``, ``scrollright``.
         """
+        from raintux.measures.plugins.mouse import mouse_measures
+        from raintux.meters.button_meter import ButtonMeter
+        from raintux.meters.text_edit_meter import TextEditMeter
+
         if kind == "move":
             self._mouse_move(x, y)
+            for mm in mouse_measures(self):
+                mm.moved(x, y)
             return False
+        if kind == "drag":
+            consumed = False
+            if self._selecting_input is not None:
+                mt = self._selecting_input
+                bx, by, _w, _h = mt.box()
+                mt.move(mt.index_at(x - bx - mt.padding[0], y - by - mt.padding[1]), True)
+                consumed = True
+            for mm in mouse_measures(self):
+                if mm.dragging:
+                    mm.moved(x, y)
+                    consumed = True
+            return consumed
         if kind == "leave":
             self._mouse_leave()
             return False
-        from raintux.meters.button_meter import ButtonMeter
 
-        if button == "left" and kind in ("down", "double"):
+        consumed = False
+        if kind in ("down", "double"):
             hit = next((m for m in reversed(self.meters) if not m.hidden and m.hit_test(x, y)), None)
-            if isinstance(hit, ButtonMeter):
+            focused = self.focused_input
+            if focused is not None and hit is not focused:
+                focused.dismiss()
+            if button == "left" and isinstance(hit, TextEditMeter) and hit.accepts_input:
+                hit.focus()
+                bx, by, _w, _h = hit.box()
+                idx = hit.index_at(x - bx - hit.padding[0], y - by - hit.padding[1])
+                if kind == "double":
+                    hit.select_word_at(idx)
+                else:
+                    hit.move(idx, False)
+                    self._selecting_input = hit
+                return True
+            if button == "left" and isinstance(hit, ButtonMeter):
                 hit.pressed = True
                 self._pressed_button = hit
                 self.host.redraw(self)
                 return True
-        if button == "left" and kind == "up" and self._pressed_button is not None:
-            btn = self._pressed_button
-            self._pressed_button = None
-            btn.pressed = False
-            if btn.hit_test(x, y):
-                self.execute(btn.get("buttoncommand"), btn)
-            self.host.redraw(self)
-            return True
+            for mm in mouse_measures(self):
+                consumed = mm.pressed(button, x, y) or consumed
+        if kind == "up":
+            if button == "left" and self._selecting_input is not None:
+                self._selecting_input = None
+                return True
+            for mm in mouse_measures(self):
+                mm.released(button, x, y)
+            if button == "left" and self._pressed_button is not None:
+                btn = self._pressed_button
+                self._pressed_button = None
+                btn.pressed = False
+                if btn.hit_test(x, y):
+                    self.execute(btn.get("buttoncommand"), btn)
+                self.host.redraw(self)
+                return True
 
         if kind.startswith("scroll"):
             names = ["mouse" + kind + "action"]
@@ -767,13 +1044,58 @@ class Skin:
         for action in names:
             mt = self.meter_at(x, y, action)
             if mt is not None:
-                self.execute(mt.mouse_action(action), mt)
+                self.run_mouse_action(mt.mouse_action(action), x, y, mt, mt)
                 return True
             skin_action = self.rm.get(action)
             if skin_action:
-                self.execute(skin_action, self.rm)
+                self.run_mouse_action(skin_action, x, y, None, self.rm)
                 return True
-        return False
+        return consumed
+
+    def key(self, key: str, ctrl: bool = False, shift: bool = False) -> bool:
+        """Editing key for the focused TextEdit (GDK key name). Returns True when handled."""
+        mt = self.focused_input
+        return bool(mt is not None and mt.handle_key(key, ctrl, shift))
+
+    def text_input(self, text: str) -> bool:
+        """Committed text (typing, IME, paste) for the focused TextEdit."""
+        mt = self.focused_input
+        return bool(mt is not None and mt.insert(text))
+
+    def keyboard_focus_lost(self) -> None:
+        mt = self.focused_input
+        if mt is not None:
+            mt.dismiss()
+
+    def drop_motion(self, x: float, y: float) -> bool:
+        from raintux.measures.plugins.dragdrop import drop_measures
+
+        accepted = False
+        for m in drop_measures(self):
+            accepted = m.drag_motion(x, y) or accepted
+        return accepted
+
+    def drop_leave(self) -> None:
+        from raintux.measures.plugins.dragdrop import drop_measures
+
+        for m in drop_measures(self):
+            m.drag_leave()
+
+    def drop_files(self, files: list[Path], x: float, y: float) -> bool:
+        from raintux.measures.plugins.dragdrop import drop_measures
+
+        handled = False
+        for m in drop_measures(self):
+            handled = m.dropped(files, x, y) or handled
+        return handled
+
+    def accepts_drops(self) -> bool:
+        from raintux.measures.plugins.dragdrop import drop_measures
+
+        return bool(drop_measures(self))
+
+    def wants_keyboard(self) -> bool:
+        return self.focused_input is not None
 
     def _mouse_move(self, x: float, y: float) -> None:
         if not self._mouse_over_skin:
@@ -790,7 +1112,7 @@ class Skin:
                 continue
             if isinstance(mt, ButtonMeter) and top_button is None:
                 top_button = mt
-            if cursor_meter is None and mt.has_mouse_actions():
+            if cursor_meter is None and (mt.has_mouse_actions() or getattr(mt, "accepts_input", False)):
                 cursor_meter = mt
             if tooltip_meter is None and mt.get("tooltiptext"):
                 tooltip_meter = mt
@@ -805,15 +1127,17 @@ class Skin:
                     changed = True
         for name in now - self._hover:
             mt = self.meter_map[name]
-            self.execute(mt.mouse_action("mouseoveraction"), mt)
+            self.run_mouse_action(mt.mouse_action("mouseoveraction"), x, y, mt, mt)
         for name in self._hover - now:
             mt = self.meter_map.get(name)
             if mt is not None:
-                self.execute(mt.mouse_action("mouseleaveaction"), mt)
+                self.run_mouse_action(mt.mouse_action("mouseleaveaction"), x, y, mt, mt)
         self._hover = now
         cursor = None
-        if cursor_meter is not None and cursor_meter.get_bool("mouseactioncursor", self.rm.get_bool("mouseactioncursor", True)):
-            cursor = cursor_meter.get("mouseactioncursorname", "pointer") or "pointer"
+        if getattr(cursor_meter, "accepts_input", False):
+            cursor = "text"
+        elif cursor_meter is not None and cursor_meter.get_bool("mouseactioncursor", self.rm.get_bool("mouseactioncursor", True)):
+            cursor = _cursor_name(cursor_meter.get("mouseactioncursorname", "hand"))
         tip = None
         if tooltip_meter is not None and not self.rm.get_bool("tooltiphidden"):
             tip = tooltip_meter.get("tooltiptext").replace("#CRLF#", "\n")
@@ -864,6 +1188,19 @@ class Skin:
             items.append((title, self.rm.get("contextaction" + sfx)))
             i += 1
         return items
+
+
+_CURSORS = {
+    "hand": "pointer", "text": "text", "help": "help", "busy": "wait", "cross": "crosshair",
+    "pen": "crosshair", "no": "not-allowed", "size_all": "move", "size_nesw": "nesw-resize",
+    "size_ns": "ns-resize", "size_nwse": "nwse-resize", "size_we": "ew-resize", "uparrow": "default",
+    "wait": "progress", "arrow": "default",
+}
+
+
+def _cursor_name(rainmeter_name: str) -> str:
+    """Rainmeter ``MouseActionCursorName`` → CSS cursor name (custom .cur files fall back to hand)."""
+    return _CURSORS.get(rainmeter_name.strip().lower(), "pointer")
 
 
 def _char_ref(m: re.Match[str]) -> str:

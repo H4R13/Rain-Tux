@@ -167,6 +167,8 @@ class Meter(Section):
         self.h_opt: float | None = None
         self._hidden_spec: str | None = None
         self._style_cache: tuple[str, list[dict[str, str]]] | None = None
+        self.disabled_actions: set[str] = set()  # !DisableMouseAction
+        self.cleared_actions: set[str] = set()  # !ClearMouseAction (until refresh)
 
     # -- options ---------------------------------------------------------------
     def styles(self) -> list[dict[str, str]]:
@@ -292,10 +294,14 @@ class Meter(Section):
 
     # -- mouse -----------------------------------------------------------------
     def mouse_action(self, name: str) -> str:
-        return self.get(name)
+        n = name.lower()
+        blocked = self.disabled_actions | self.cleared_actions
+        if n in blocked or "*" in blocked:
+            return ""
+        return self.get(n)
 
     def has_mouse_actions(self) -> bool:
-        return any(self.opts.get(k) for k in CLICK_ACTIONS)
+        return any(self.mouse_action(k) for k in CLICK_ACTIONS)
 
     def hit_test(self, x: float, y: float) -> bool:
         if self.matrix is not None:

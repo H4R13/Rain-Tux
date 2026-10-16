@@ -33,6 +33,34 @@ _BUILTIN: dict[str, str] = {
     "loop": "misc_measures:LoopMeasure",
     "script": "script_measure:ScriptMeasure",
     "registry": "misc_measures:UnsupportedMeasure",
+    # Current Rainmeter builds the old default plugins in as measure types.
+    "webparser": "plugins.webparser:WebParserPlugin",
+    "actiontimer": "plugins.actiontimer:ActionTimerPlugin",
+    "advancedcpu": "plugins.system:UsageMonitorPlugin",
+    "audio": "plugins.media:AudioPlugin",
+    "audiolevel": "plugins.media:AudioLevelPlugin",
+    "coretemp": "plugins.system:TemperaturePlugin",
+    "speedfan": "plugins.system:TemperaturePlugin",
+    "dragdrop": "plugins.dragdrop:DragDropMeasure",
+    "fileview": "plugins.files:FileViewPlugin",
+    "folderinfo": "plugins.files:FolderInfoPlugin",
+    "inputtext": "plugins.inputtext:InputTextPlugin",
+    "mediakey": "plugins.media:MediaKeyPlugin",
+    "mouse": "plugins.mouse:MouseMeasure",
+    "nowplaying": "plugins.media:NowPlayingPlugin",
+    "ping": "plugins.system:PingPlugin",
+    "power": "plugins.system:PowerPlugin",
+    "process": "plugins.system:ProcessPlugin",
+    "quote": "plugins.files:QuotePlugin",
+    "recyclemanager": "plugins.files:RecycleManagerPlugin",
+    "runcommand": "plugins.system:RunCommandPlugin",
+    "sysinfo": "plugins.system:SysInfoPlugin",
+    "usagemonitor": "plugins.system:UsageMonitorPlugin",
+    "wifistatus": "plugins.system:WiFiStatusPlugin",
+    "perfmon": "misc_measures:UnsupportedMeasure",
+    "resmon": "misc_measures:UnsupportedMeasure",
+    "itunes": "plugins.media:NowPlayingPlugin",
+    "windowmessage": "misc_measures:UnsupportedMeasure",
 }
 
 # Plugin= name (lower-case, without path / ".dll") -> "module:Class" under raintux.measures.plugins
@@ -58,6 +86,12 @@ _PLUGINS: dict[str, str] = {
     "coretemp": "system:TemperaturePlugin",
     "speedfanplugin": "system:TemperaturePlugin",
     "inputtext": "inputtext:InputTextPlugin",
+    "drag&drop": "dragdrop:DragDropMeasure",
+    "mouse": "mouse:MouseMeasure",
+    "itunesplugin": "media:NowPlayingPlugin",
+    "perfmon": "",
+    "resmon": "",
+    "windowmessageplugin": "",
 }
 
 

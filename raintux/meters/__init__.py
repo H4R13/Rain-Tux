@@ -23,9 +23,13 @@ def _registry() -> dict[str, type[Meter]]:
     from raintux.meters.roundline_meter import RoundlineMeter
     from raintux.meters.shape_meter import ShapeMeter
     from raintux.meters.string_meter import StringMeter
+    from raintux.meters.svg_meter import SvgMeter
+    from raintux.meters.text_edit_meter import TextEditMeter
 
     return {
         "string": StringMeter,
+        "textedit": TextEditMeter,
+        "svg": SvgMeter,
         "image": ImageMeter,
         "bar": BarMeter,
         "shape": ShapeMeter,

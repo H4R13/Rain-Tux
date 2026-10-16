@@ -63,6 +63,8 @@ class UptimeMeasure(Measure):
 class LoopMeasure(Measure):
     """``Measure=Loop`` — StartValue → EndValue by Increment, LoopCount times (0 = forever)."""
 
+    bang_namespace = "loop"
+
     def read_measure(self) -> None:
         self.start = self.get_number("startvalue", 0)
         self.end = self.get_number("endvalue", 100)
