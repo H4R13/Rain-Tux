@@ -354,6 +354,7 @@ class Skin:
                 "@": str(self.resources) + "/",
                 "SETTINGSPATH": str(Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "raintux") + "/",
                 "PROGRAMPATH": str(Path(__file__).resolve().parent.parent) + "/",
+                "PROGRAMDRIVE": "C:",  # FreeDiskSpace maps C: to /
                 "ADDONSPATH": str(self.skins_root.parent / "Addons") + "/",
                 "PLUGINSPATH": str(self.skins_root.parent / "Plugins") + "/",
                 "CONFIGEDITOR": os.environ.get("VISUAL") or os.environ.get("EDITOR") or "xdg-open",

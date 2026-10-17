@@ -174,7 +174,7 @@ class StringMeter(Meter):
             style.wrap = True
             style.ellipsize = True
             nat_w, _ = T.measure(text, style)
-            width = min(nat_w, limit_w - 2 * legacy_pad) if limit_w else nat_w
+            width = min(nat_w, limit_w) if limit_w else nat_w
             style.width = max(1.0, width)
             limit_h = self.clip_h if self.clip_h is not None and self.clip_h > 0 else self.h_opt
             style.height = limit_h
@@ -185,13 +185,15 @@ class StringMeter(Meter):
             self.content_w = (self.w_opt if self.w_opt is not None and self.clip_w is None else w + 2 * legacy_pad)
             self.content_h = self.h_opt if self.h_opt is not None and self.clip_h is None else h
             return
+        # AccurateText=0 shifts the text by legacy_pad but keeps the full W for wrapping
+        # and clipping (Rainmeter's Canvas::GetTextDrawPosition).
         if self.clip == 1 and self.w_opt:
-            style.width = max(1.0, self.w_opt - 2 * legacy_pad)
+            style.width = max(1.0, self.w_opt)
             style.ellipsize = True
             style.wrap = bool(self.h_opt)
             style.height = self.h_opt
         elif self.w_opt:
-            style.width = max(1.0, self.w_opt - 2 * legacy_pad)
+            style.width = max(1.0, self.w_opt)
         self.style = style
         w, h = T.measure(text, style)
         self.natural_size(w + 2 * legacy_pad, h)
@@ -217,8 +219,8 @@ class StringMeter(Meter):
         if not self.text:
             return
         legacy_pad = 0.0 if self.skin.accurate_text else (self.size * 96 / 72) / 6.0
-        x = legacy_pad
-        w = self.content_w - 2 * legacy_pad
+        x = {"left": legacy_pad, "right": -legacy_pad}.get(self.h_align, 0.0)
+        w = self.content_w
         if self.clip:
             cr.rectangle(0, 0, self.content_w, self.content_h)
             cr.clip()

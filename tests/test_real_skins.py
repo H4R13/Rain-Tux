@@ -120,3 +120,23 @@ def test_pcre_character_classes() -> None:
     assert compile_pcre(r"[[:alpha:]]+").search("ab1").group(0) == "ab"
     assert compile_pcre(r"[[(]x").search("[x").group(0) == "[x"
     assert compile_pcre(r"[\h,]+").search("a ,\tb").group(0) == " ,\t"
+
+
+@pytest.mark.gtk
+def test_legacy_text_padding_keeps_the_full_width(tmp_path: Path) -> None:
+    import cairo
+
+    from raintux.meters import text as T
+
+    skin, _ = make_skin(tmp_path, """
+        [MeterDigit]
+        Meter=String
+        Text=8
+        FontSize=35
+        W=32
+        H=70
+        ClipString=1
+    """)  # Win10 Widgets' clock digits: AccurateText=0 must not shrink the clip width
+    mt = skin.meter("MeterDigit")
+    cr = cairo.Context(cairo.ImageSurface(cairo.FORMAT_ARGB32, 10, 10))
+    assert not T.make_layout(cr, mt.text, mt.style).is_ellipsized()
