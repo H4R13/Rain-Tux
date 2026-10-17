@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -80,6 +81,12 @@ def monitor_at(x: float, y: float) -> Any:
         if d < best_d:
             best, best_d = m, d
     return best
+
+
+def _press_relative_pointer() -> bool:
+    """Does the compositor keep pointer coordinates relative to the press-time surface position
+    while a button is held? Sway does; compositors following the protocol literally don't."""
+    return bool(os.environ.get("SWAYSOCK")) or "sway" in os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
 
 def _current_event(ctrl: Any) -> Gdk.Event | None:
@@ -414,10 +421,15 @@ class SkinWindow(Gtk.ApplicationWindow):
                 return
         if not self.layer:
             return
-        # Event coordinates are relative to where the surface was when the event was
-        # generated; moving by (x - px) keeps the grab point under the pointer.
         cur_x, cur_y = self._margins()
-        nx, ny = int(round(cur_x + x - px)), int(round(cur_y + y - py))
+        if _press_relative_pointer():
+            # Sway keeps reporting coordinates relative to where the surface was when the
+            # button went down (seatop_down), so measure from the press position.
+            _px, _py, start_x, start_y = self._press
+            nx, ny = int(round(start_x + x - px)), int(round(start_y + y - py))
+        else:
+            # Coordinates relative to the surface's current position: add this step.
+            nx, ny = int(round(cur_x + x - px)), int(round(cur_y + y - py))
         if (nx, ny) != (cur_x, cur_y):
             self.move_to(nx, ny)
 
