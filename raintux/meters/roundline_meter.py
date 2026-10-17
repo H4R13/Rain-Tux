@@ -31,7 +31,8 @@ class RoundlineMeter(Meter):
     def draw_content(self, cr: Any) -> None:
         w, h = self.content_w, self.content_h
         cx, cy = w / 2.0, h / 2.0
-        v = value_fraction(self, self.remainder)
+        # Without a MeasureName Rainmeter draws a Roundline full (value 1), e.g. a background ring.
+        v = value_fraction(self, self.remainder) if self.measures else 1.0
         outer = self.line_length if self.line_length is not None else min(w, h) / 2.0
         inner = self.line_start
         if self.control_length:

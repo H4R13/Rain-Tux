@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased — tested with real skin packages
+
+All 211 skins in Sonder, SysDash, ModernGadgets, Win10 Widgets, Monstercat Visualizer, Fountain
+of Colors and DetailedSystemMonitor now install, load and render; each fix below follows
+Rainmeter's source.
+
+- Lua runs on Lua 5.1 like Rainmeter (`loadstring`, `unpack`, number formatting); UTF-16 scripts
+  load; text-mode file reads drop the `` of CRLF lines as on Windows; inline `[&Script:…]`
+  calls restart the 5 s watchdog.
+- Option reads: `[Section]` variables resolve on every read; `[Meter:X/Y]` follows the relative
+  chain before the first layout; formulas are anything starting with `(`; `%APPDATA%`-style
+  Windows variables expand; `#CURRENTSECTION#`, `#PROGRAMDRIVE#` and screen variables exist;
+  built-in variables work in `@Include` paths.
+- Bangs: arguments are split before section variables resolve (values with spaces stay whole);
+  `!SetOption` with an empty value restores the MeterStyle; `OnChangeAction` can't loop through
+  `!Update`; If/Update/Change actions run in Rainmeter's order.
+- Measures: formatted Time measures take their number from the text; `TimeStampFormat` accepts
+  `%D`/`%T`/`%F`…; String measures have their value before the first update; FreeDiskSpace
+  `Type=1` returns Rainmeter's numbers.
+- Shapes: Combine uses the base shape's fill and its own transforms (`Shape1` = `Shape`); Arc
+  takes radius/angle/flags in Rainmeter's order, open arcs/curves aren't filled; a partial
+  `TransformOrder` keeps the other steps; `*` keeps an ArcTo default.
+- Text: AccurateText=0 keeps the full W for clipping; InlineSetting Shadow keeps inline sizes;
+  InlineSetting parameters accept formulas; fonts bundled with a skin show even when registered
+  after the first render; PCRE classes like `[:alpha:]` work.
+- Speed: the `#Variable#` table is cached per skin (an 800-meter Sonder skin loads in about 1 s
+  instead of minutes); meters with runaway coordinates no longer stretch the window.
+- `install.sh` installs Selawik (Segoe UI's metrics, OFL) so Windows skins wrap text as on
+  Windows; re-running it follows `RAINTUX_REPO`.
+
 ## 0.9.0 — Rainmeter parity
 
 The engine was rebuilt around Rainmeter's model so that Windows skins run unchanged.

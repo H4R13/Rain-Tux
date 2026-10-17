@@ -273,3 +273,26 @@ def test_meter_position_while_loading_follows_the_relative_chain(tmp_path: Path)
     """)  # SysDash's settings: read at load, before any layout
     skin.update()
     assert skin.meter("MeterBelow").y == 25 + 20 + 15 + 60
+
+
+@pytest.mark.gtk
+def test_roundline_without_measure_is_full(tmp_path: Path) -> None:
+    import cairo
+
+    skin, _ = make_skin(tmp_path, """
+        [MeterRing]
+        Meter=Roundline
+        W=40
+        H=40
+        LineStart=10
+        LineLength=20
+        Solid=1
+        LineColor=255,255,255
+        RotationAngle=(Rad(360))
+    """)  # DetailedSystemMonitor's background rings
+    skin.update()
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 40, 40)
+    skin.draw(cairo.Context(surf))
+    surf.flush()
+    data = surf.get_data()
+    assert data[(20 * 40 + 35) * 4 + 3] > 0  # a pixel on the ring, right of the centre

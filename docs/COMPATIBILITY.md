@@ -14,7 +14,8 @@ Rainmeter's source (sizing, relative positions, Show/Hide, section variables).
 | `#Var#`, `#*Escape*#`, built-in variables incl. `@N` monitor variants | Same |
 | Formulas `(…)` — operators, ternary, functions, hex/binary | Same (division by zero = 0) |
 | Windows paths (`\`, drive letters, file-name case) | Converted; file names matched case-insensitively |
-| Windows fonts (Segoe UI, Trebuchet MS, Calibri, Consolas…) | Mapped to close free fonts; `@Resources/Fonts` and `LocalFont` are loaded |
+| Windows fonts (Segoe UI, Trebuchet MS, Calibri, Consolas…) | Mapped to close free fonts (Segoe UI → Selawik, installed by `install.sh`); `@Resources/Fonts` and `LocalFont` are loaded |
+| Windows environment variables (`%APPDATA%`, `%SystemDrive%`, `%USERPROFILE%`…) | Expanded to their Linux equivalents (`C:` for drives); unknown names stay as written |
 
 ## Meters
 
@@ -37,7 +38,7 @@ Rainmeter's source (sizing, relative positions, Show/Hide, section variables).
 | FreeDiskSpace | `C:` = `/`, later letters = removable mounts, or `Drive=/path` |
 | NetIn / NetOut / NetTotal | psutil per interface; auto MaxValue |
 | Time, Uptime, Calc, String, Loop | Same |
-| Script | Lua 5.4 via lupa; SKIN/SELF API; 5 s watchdog per call |
+| Script | Lua 5.1 (as in Rainmeter) via lupa; SKIN/SELF API; CRLF files read as on Windows; 5 s watchdog per call |
 | WebParser | urllib in a worker thread; PCRE `(?siU)` translated; Download=1 to `~/.cache/raintux` |
 | NowPlaying | MPRIS (any player); `PlayerName` picks one, else the playing one |
 | Audio / Win7AudioPlugin | wpctl or pactl |
