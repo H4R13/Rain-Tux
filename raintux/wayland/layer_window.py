@@ -82,6 +82,15 @@ def monitor_at(x: float, y: float) -> Any:
     return best
 
 
+def _current_event(ctrl: Any) -> Gdk.Event | None:
+    """PyGObject before 3.50 passes None for the GdkEvent of EventControllerLegacy::event
+    (Ubuntu 24.04 ships 3.48); the controller still knows the event being handled."""
+    try:
+        return ctrl.get_current_event()
+    except Exception:  # pragma: no cover
+        return None
+
+
 class SkinWindow(Gtk.ApplicationWindow):
     """Transparent undecorated window drawing a :class:`~raintux.core.skin.Skin`."""
 
@@ -292,7 +301,10 @@ class SkinWindow(Gtk.ApplicationWindow):
         ok, x, y = event.get_position()
         return ok, x / self.zoom, y / self.zoom
 
-    def _on_event(self, _ctrl: Gtk.EventControllerLegacy, event: Gdk.Event) -> bool:
+    def _on_event(self, ctrl: Gtk.EventControllerLegacy, event: Gdk.Event | None) -> bool:
+        event = event or _current_event(ctrl)
+        if event is None:
+            return False
         et = event.get_event_type()
         skin = self.skin
         if et in (Gdk.EventType.MOTION_NOTIFY, Gdk.EventType.ENTER_NOTIFY):
@@ -458,7 +470,10 @@ class CaptureOverlay(Gtk.Window):
             self.origin = (g.x, g.y)
         self.present()
 
-    def _event(self, _c: Any, event: Gdk.Event) -> bool:
+    def _event(self, ctrl: Any, event: Gdk.Event | None) -> bool:
+        event = event or _current_event(ctrl)
+        if event is None:
+            return False
         et = event.get_event_type()
         ok, x, y = event.get_position()
         if not ok:
