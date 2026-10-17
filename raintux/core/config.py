@@ -58,11 +58,21 @@ class RainTuxConfig(BaseModel):
     ui: UiConfig = Field(default_factory=UiConfig)
 
 
+def skins_root() -> Path:
+    """Rainmeter-format skins (INI files, Lua scripts), like ``Documents\\Rainmeter\\Skins``."""
+    return Path.home() / "RainTux" / "Skins"
+
+
+def python_skins_root() -> Path:
+    """Skins whose scripts are Python (``ScriptFile=*.py``), kept apart from the Lua ones."""
+    return Path.home() / "RainTux" / "PythonSkins"
+
+
 def default_skins_roots() -> list[Path]:
     """Default search paths for skins (XDG + legacy ~/RainTux)."""
-    home = Path.home()
     roots = [
-        home / "RainTux" / "Skins",
+        skins_root(),
+        python_skins_root(),
         _xdg_data_home() / "raintux" / "skins",
         Path("/usr/share/raintux/skins") if Path("/usr/share/raintux/skins").exists() else None,
     ]
@@ -74,11 +84,12 @@ def layouts_root() -> Path:
 
 
 def ensure_layout() -> None:
-    """Create config dir, data dir, and default skins folder if missing."""
+    """Create config dir, data dir, and default skins folders if missing."""
     DEFAULT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = _xdg_data_home() / "raintux"
     (data / "logs").mkdir(parents=True, exist_ok=True)
-    (Path.home() / "RainTux" / "Skins").mkdir(parents=True, exist_ok=True)
+    skins_root().mkdir(parents=True, exist_ok=True)
+    python_skins_root().mkdir(parents=True, exist_ok=True)
     layouts_root().mkdir(parents=True, exist_ok=True)
 
 

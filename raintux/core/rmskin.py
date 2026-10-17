@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import shutil
 import time
 import zipfile
@@ -29,6 +30,10 @@ class PackageInfo:
     layouts: list[str] = field(default_factory=list)
     plugins: list[str] = field(default_factory=list)
     fonts: list[str] = field(default_factory=list)
+    python_scripts: bool = False  # a skin has ScriptFile=*.py: it installs into the PythonSkins folder
+
+
+_PY_SCRIPT = re.compile(r"^\s*ScriptFile\s*=\s*\"?[^\r\n\"]*\.py\"?\s*$", re.I | re.M)
 
 
 def _read_ini(text: str) -> dict[str, dict[str, str]]:
@@ -83,9 +88,17 @@ def open_package(path: Path) -> tuple[PackageInfo, zipfile.ZipFile]:
             info.plugins.append(parts[-1])
         if n.lower().endswith((".ttf", ".otf")):
             info.fonts.append(parts[-1])
+        if top == "skins" and n.lower().endswith(".ini") and not info.python_scripts:
+            raw = zf.read(n)
+            info.python_scripts = bool(_PY_SCRIPT.search(raw.decode(detect_encoding(raw), errors="replace")))
     if not info.name and info.skins:
         info.name = info.skins[0]
     return info, zf
+
+
+def install_root(info: PackageInfo, skins_root: Path, python_root: Path) -> Path:
+    """The folder a package's skins go into: Python-scripted skins apart from the INI + Lua ones."""
+    return python_root if info.python_scripts else skins_root
 
 
 def _preserve_variables(old_root: Path, new_root: Path, rel_files: list[str]) -> None:

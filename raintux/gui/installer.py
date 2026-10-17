@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 from gi.repository import GLib, Gtk
 
-from raintux.core.rmskin import install_package, open_package
+from raintux.core.config import python_skins_root
+from raintux.core.rmskin import install_package, install_root, open_package
 
 if TYPE_CHECKING:
     from raintux.core.engine import RainTuxEngine
@@ -43,7 +44,10 @@ def install_dialog(engine: RainTuxEngine, path: Path, parent: Any = None) -> Non
         lines.append("Layouts: " + ", ".join(info.layouts))
     if info.plugins:
         lines.append("Windows plugins (not usable on Linux, skipped): " + ", ".join(sorted(set(info.plugins))))
-    existing = [s for s in info.skins if (engine.primary_root() / s).exists()]
+    root = install_root(info, engine.primary_root(), python_skins_root())
+    if info.python_scripts:
+        lines.append(f"Contains Python scripts (code that runs on this computer); installs into {root}")
+    existing = [s for s in info.skins if (root / s).exists()]
     if existing:
         lines.append("Existing folders are backed up to @Backup: " + ", ".join(existing))
     box.append(Gtk.Label(label="\n".join(lines), xalign=0, wrap=True))
@@ -58,7 +62,7 @@ def install_dialog(engine: RainTuxEngine, path: Path, parent: Any = None) -> Non
 
     def do_install(*_a: Any) -> None:
         try:
-            result = install_package(path, engine.primary_root(), layouts_root=engine.primary_root().parent / "Layouts")
+            result = install_package(path, root, layouts_root=engine.primary_root().parent / "Layouts")
         except Exception as e:
             log.exception("install failed")
             Gtk.AlertDialog(message="Install failed", detail=str(e)).show(win)

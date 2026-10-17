@@ -435,6 +435,10 @@ class ScriptMeasure(Measure):
             log.warning("[%s] Script measure without ScriptFile", self.name)
             self._failed = True
             return
+        if self.script_file.strip().strip('"').lower().endswith(".py"):
+            log.warning("[%s] %s is a Python script; Python skin scripting is not available yet", self.name, self.script_file)
+            self._failed = True
+            return
         try:
             try:
                 from lupa.lua51 import LuaRuntime  # Rainmeter embeds Lua 5.1 (loadstring, unpack, setfenv…)

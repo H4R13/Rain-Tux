@@ -47,7 +47,11 @@ python3 -m venv --system-site-packages .venv      # PyGObject + pycairo from you
 | `Rainmeter.exe !Bang …` | `raintux '!Bang' args…` talks to the running instance |
 
 Skins live in `~/RainTux/Skins/<Suite>/<Config>/<Skin>.ini`, exactly like `Documents\Rainmeter\Skins`.
-The first launch loads the bundled **RainTux** suite (Welcome, Clock, System, Network).
+Skins whose scripts are Python (`ScriptFile=*.py`) get their own folder, `~/RainTux/PythonSkins/`,
+so Rainmeter-format skins (INI + Lua) and Python skins are easy to tell apart; the installer puts
+each package in the right one. The first launch loads the bundled **RainTux** suite (Welcome,
+Clock, System, Network) and also installs **illustro** (RainTux edition), Rainmeter's classic
+starter suite adapted for Linux.
 
 ## What is supported
 
@@ -112,7 +116,8 @@ raintux --refresh-all
 
 | What | Where |
 |------|-------|
-| Skins | `~/RainTux/Skins/` (also `~/.local/share/raintux/skins`) |
+| Skins (Rainmeter format: INI + Lua) | `~/RainTux/Skins/` (also `~/.local/share/raintux/skins`) |
+| Skins with Python scripts | `~/RainTux/PythonSkins/` |
 | Layouts | `~/RainTux/Layouts/<Name>/` |
 | Loaded skins and positions (Rainmeter.ini) | `~/.config/raintux/skins.json` |
 | Settings | `~/.config/raintux/config.toml` |
@@ -129,7 +134,7 @@ Run the web UI with `cd ui && npm install && npm run dev`.
 ## Development
 
 ```bash
-python -m pytest            # 100+ tests; they run without a display (GTK-free core)
+python -m pytest            # 150+ tests; they run without a display (GTK-free core)
 RAINTUX_DEV=1 python -m raintux
 ```
 
@@ -137,7 +142,22 @@ The core (`raintux/core`, `raintux/measures`, `raintux/meters`) has no GTK depen
 side (`raintux/core/engine.py`, `raintux/wayland`, `raintux/gui`) implements the `SkinHost`
 interface. `tests/helpers.py` loads skins headlessly for tests.
 
-## License
+New to the code? [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) walks through how a skin is loaded,
+updated and drawn, and where to add a measure, meter, plugin or bang.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers setup, tests (also from Windows through WSL) and
+licensing of contributions.
 
-MIT. The bundled RainTux skins are MIT as well. Rainmeter is a separate GPL-2.0 project;
-RainTux shares no code with it.
+## License and credits
+
+RainTux is free software under the **GNU General Public License, version 2 or later**
+([LICENSE](LICENSE)), the same license family as Rainmeter. Copyright (C) 2026 Viktor_Hashmat
+and RainTux contributors.
+
+RainTux exists because of **[Rainmeter](https://rainmeter.net)** by the Rainmeter team: it reads
+Rainmeter's skin format, and Rainmeter's GPL source was the reference for how options, bangs,
+measures, meters and the Lua API behave. RainTux is a separate program written for Linux and is
+not affiliated with or endorsed by the Rainmeter team. See [NOTICE](NOTICE) for all credits.
+
+Bundled skins keep their own licenses: the **RainTux** suite is MIT, so skin authors can reuse it
+freely; **illustro** (RainTux edition) is an adaptation of illustro by poiru, under
+[CC BY-NC-SA 3.0](raintux/data/skins/illustro/LICENSE.txt), and is not covered by the GPL.

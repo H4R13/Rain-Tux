@@ -1,0 +1,40 @@
+RainTux
+Copyright (C) 2026 Viktor_Hashmat and RainTux contributors
+
+RainTux is free software: you can redistribute it and/or modify it under the terms of the GNU
+General Public License as published by the Free Software Foundation, either version 2 of the
+License, or (at your option) any later version. See LICENSE for the full text.
+
+RainTux is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even
+the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+
+Credits
+-------
+
+Rainmeter - https://rainmeter.net - https://github.com/rainmeter/rainmeter
+  By the Rainmeter team, licensed under the GNU GPL v2.
+  RainTux brings Rainmeter's skins to Linux. It reads Rainmeter's skin format (.ini skins,
+  .rmskin packages, layouts) and follows Rainmeter's behaviour; Rainmeter's source code was the
+  reference for how options, bangs, measures, meters and the Lua scripting API work. RainTux is a
+  separate program written in Python for Linux. It is not affiliated with or endorsed by the
+  Rainmeter team; "Rainmeter" is their name and is used here only to describe compatibility.
+
+illustro - bundled as "illustro (RainTux edition)" in raintux/data/skins/illustro
+  By poiru for Rainmeter, licensed under Creative Commons BY-NC-SA 3.0
+  (https://creativecommons.org/licenses/by-nc-sa/3.0/). Adapted for RainTux; the changes are
+  listed in raintux/data/skins/illustro/LICENSE.txt. These files are not covered by the GPL and
+  may not be used commercially: anyone redistributing RainTux commercially must leave them out.
+
+RainTux skin suite - raintux/data/skins/RainTux
+  Part of RainTux, licensed under the MIT license so skin authors can reuse it freely.
+
+
+Libraries
+---------
+
+RainTux uses these libraries under their own licenses (they are installed separately, not
+included in this repository): GTK 4 and PyGObject (LGPL), gtk4-layer-shell (MIT), pycairo
+(LGPL-2.1 / MPL-1.1), Lua 5.1 through lupa (MIT), Pillow (MIT-CMU), psutil (BSD-3-Clause),
+FastAPI (MIT), Uvicorn (BSD-3-Clause), pydantic (MIT), aiohttp (Apache-2.0), watchdog
+(Apache-2.0) and rich (MIT).

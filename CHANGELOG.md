@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — license, bundled illustro, developer docs
+
+- License: RainTux is now under the GNU GPL, version 2 or later, Rainmeter's license family.
+  NOTICE and the README credit the Rainmeter team, whose skin format and source RainTux follows.
+- illustro (RainTux edition) ships with RainTux and is installed on first launch: Linux mount
+  points instead of drive letters, the desktop's system monitor instead of taskmgr.exe, "Trash"
+  instead of "Recycle Bin" (a right-click no longer empties it without asking), and RainTux
+  texts and links. It stays under CC BY-NC-SA 3.0 with credit to poiru.
+- Skins with Python scripts (`ScriptFile=*.py`) install into `~/RainTux/PythonSkins`, apart from
+  Rainmeter-format skins in `~/RainTux/Skins`. Until Python scripting lands, such a measure
+  says so instead of failing as a Lua script.
+- docs/ARCHITECTURE.md and CONTRIBUTING.md explain the code layout, the life of a skin, and
+  where to add measures, meters, plugins and bangs.
+
 ## Unreleased — tested with real skin packages
 
 All 211 skins in Sonder, SysDash, ModernGadgets, Win10 Widgets, Monstercat Visualizer, Fountain

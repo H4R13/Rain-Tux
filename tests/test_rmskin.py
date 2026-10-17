@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from raintux.core.rmskin import install_package, open_package
+from raintux.core.config import default_skins_roots
+from raintux.core.rmskin import install_package, install_root, open_package
 
 
 def _package(path: Path, files: dict[str, str], footer: bool = True) -> Path:
@@ -69,3 +70,24 @@ def test_zip_slip_is_ignored(tmp_path: Path, evil: str) -> None:
     assert not (tmp_path / "escape.ini").exists()
     assert not Path("/abs.ini").exists()
     assert (tmp_path / "Skins" / "Suite" / "ok.ini").is_file()
+
+
+@pytest.mark.parametrize(("script", "python"), [(r"#@#Scripts\Main.py", True), ('"main.PY"', True),
+                                                ("Main.lua", False), (None, False)])
+def test_python_skins_install_into_their_own_folder(tmp_path: Path, script: str | None, python: bool) -> None:
+    ini = "[Rainmeter]\n[MeasureScript]\nMeasure=Script\n" + (f"ScriptFile={script}\n" if script else "")
+    pkg = _package(tmp_path / "s.rmskin", {"RMSKIN.ini": RMSKIN_INI, "Skins/Suite/Clock/Clock.ini": ini})
+    info, zf = open_package(pkg)
+    zf.close()
+    assert info.python_scripts is python
+    skins, py_skins = tmp_path / "Skins", tmp_path / "PythonSkins"
+    root = install_root(info, skins, py_skins)
+    assert root == (py_skins if python else skins)
+    install_package(pkg, root)
+    assert (root / "Suite" / "Clock" / "Clock.ini").is_file()
+
+
+def test_lua_and_python_skins_have_separate_default_folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    roots = default_skins_roots()
+    assert roots[:2] == [tmp_path / "RainTux" / "Skins", tmp_path / "RainTux" / "PythonSkins"]
