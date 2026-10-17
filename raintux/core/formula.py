@@ -270,26 +270,21 @@ def evaluate(src: str, resolve: Resolver | None = None) -> float:
     return v
 
 
-def _find_close(text: str, start: int) -> int:
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "(":
-            depth += 1
-        elif text[i] == ")":
-            depth -= 1
-            if depth == 0:
-                return i
-    return -1
-
-
 def parse_number(value: str, default: float = 0.0, resolve: Resolver | None = None) -> float:
-    """Numeric option value: a plain number, or a formula when wrapped in ``(…)``."""
+    """Numeric option value: a plain number, or a formula when it starts with ``(``.
+
+    Like Rainmeter's ParseUtil, the whole text is the formula, so ``((a+b)*c)/2`` works;
+    a formula error gives ``default``.
+    """
     v = value.strip()
     if not v:
         return default
-    try:
-        if v.startswith("(") and _find_close(v, 0) == len(v) - 1:
+    if v.startswith("("):
+        try:
             return evaluate(v, resolve)
+        except (FormulaError, ValueError, TypeError):
+            return default
+    try:
         return _num(v)
     except (FormulaError, ValueError, TypeError):
         # Rainmeter reads the leading number of things like "12px" or "5.5 ".

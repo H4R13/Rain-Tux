@@ -217,7 +217,9 @@ def _draw_range_shadow(cr: Any, text: str, style: TextStyle, layout: Any, start:
                        x: float, y: float, color: tuple[float, float, float, float]) -> None:
     """InlineSetting=Shadow: redraw only the matched range, offset, in the shadow colour."""
     shadow = layout.copy()
-    attrs = Pango.AttrList()
+    # Keep the inline sizes/faces; only the colours change (later attributes win).
+    base = layout.get_attributes()
+    attrs = base.copy() if base is not None else Pango.AttrList()
     hide = Pango.attr_foreground_alpha_new(1)
     hide.start_index, hide.end_index = 0, len(text.encode("utf-8"))
     attrs.insert(hide)

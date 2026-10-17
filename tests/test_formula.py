@@ -56,4 +56,5 @@ def test_parse_number() -> None:
     assert parse_number("12px") == 12  # leading number, like Rainmeter
     assert parse_number("abc", 7) == 7
     assert parse_number("5+5") == 5  # formulas need parentheses
-    assert parse_number("(1+1)*2") == 0  # not wrapped as a whole: not a formula (Rainmeter reads 0)
+    assert parse_number("(1+1)*2") == 4  # starts with "(": the whole text is the formula (ParseUtil)
+    assert parse_number("(5)px", 3) == 3  # formula error: the default
