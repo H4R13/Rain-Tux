@@ -66,14 +66,31 @@ def _ctx() -> Any:
 
 
 def reset_font_cache() -> None:
-    """Call after registering new fonts so Pango sees them."""
+    """Call after registering new fonts so Pango sees them.
+
+    A fontconfig-based font map keeps its font set (a new font map does too), so it has to be
+    told: ``pango_fc_font_map_config_changed``, which PyGObject doesn't expose (no PangoFc).
+    """
     global _measure_ctx
     _measure_ctx = None
-    if HAVE_PANGO:
-        try:
-            PangoCairo.FontMap.set_default(None)
-        except Exception:  # pragma: no cover
-            log.debug("could not reset Pango font map", exc_info=True)
+    if not HAVE_PANGO:
+        return
+    try:
+        import ctypes
+        import ctypes.util
+
+        fontmap = PangoCairo.FontMap.get_default()
+        lib = ctypes.util.find_library("pangoft2-1.0")
+        if lib is None or "Fc" not in type(fontmap).__name__:
+            return
+        capsule = ctypes.pythonapi.PyCapsule_GetPointer
+        capsule.restype = ctypes.c_void_p
+        capsule.argtypes = [ctypes.py_object, ctypes.c_char_p]
+        changed = ctypes.CDLL(lib).pango_fc_font_map_config_changed
+        changed.argtypes = [ctypes.c_void_p]
+        changed(capsule(fontmap.__gpointer__, None))
+    except Exception:  # pragma: no cover
+        log.debug("could not refresh Pango's font map", exc_info=True)
 
 
 def _byte_index(text: str, char_index: int) -> int:

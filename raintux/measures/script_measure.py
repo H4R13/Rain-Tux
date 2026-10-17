@@ -353,5 +353,6 @@ class ScriptMeasure(Measure):
         """``[&Measure:func('x')]``: evaluate a Lua expression and return its value."""
         if self._lua is None:
             return ""
+        self._arm()  # every entry point restarts the 5 s watchdog
         result = self._lua.eval(call)
         return "" if result is None else _lua_str(result)
