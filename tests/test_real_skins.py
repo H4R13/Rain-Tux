@@ -220,6 +220,37 @@ def test_lua_reads_crlf_files_like_windows(tmp_path: Path) -> None:
     assert skin.measure("MeasureScript").string_value() == "[Variables]|Config=Fountain of Colors"
 
 
+def test_lua_file_paths_written_for_windows(tmp_path: Path) -> None:
+    pytest.importorskip("lupa")
+    skin, _ = make_skin(tmp_path, """
+        [MeasureScript]
+        Measure=Script
+        ScriptFile=#@#Scripts\\Main.lua
+    """, files={
+        "Test/@Resources/Scripts/helper.lua": "function Twice(x) return 2 * x end\n",
+        "Test/@Resources/Scripts/util.lua": "return {name = 'util'}\n",
+        "Test/@Resources/Data/Values.txt": "21\n",
+        "Test/@Resources/Scripts/Main.lua": """
+            local res = SKIN:GetVariable('@')
+            function Initialize()
+              dofile(res .. 'SCRIPTS\\\\Helper.lua')
+              local f = io.open(res .. 'data\\\\values.TXT')
+              n = tonumber(f:read())
+              f:close()
+              package.path = res .. 'Scripts\\\\?.lua;' .. package.path
+              name = require('Util').name .. loadfile(res .. 'scripts\\\\UTIL.lua')().name
+              local w = io.open(res .. 'DATA\\\\Out.txt', 'w')
+              w:write('saved')
+              w:close()
+            end
+            function Update() return Twice(n) .. name end
+        """,
+    })  # skins build paths as SKIN:GetVariable('@')..'Scripts\\Lib.lua', in whatever case
+    skin.update()
+    assert skin.measure("MeasureScript").string_value() == "42utilutil"
+    assert (tmp_path / "Skins" / "Test" / "@Resources" / "Data" / "Out.txt").read_text() == "saved"
+
+
 def test_string_measure_value_is_ready_for_meters_read_before_it_updates(tmp_path: Path) -> None:
     skin, _ = make_skin(tmp_path, """
         [MeasureDrive]

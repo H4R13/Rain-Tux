@@ -6,16 +6,20 @@ SKIN:Bang / GetMeasure / GetMeter / GetVariable / ReplaceVariables / ParseFormul
 MakePathAbsolute / GetX / GetY / GetW / GetH; measure objects (GetValue,
 GetStringValue, GetRelativeValue, GetMinValue, GetMaxValue, GetValueRange, GetOption,
 GetNumberOption, GetName, Enable, Disable) and meter objects (GetOption,
-GetNumberOption, GetName, GetX/Y/W/H, SetX/Y/W/H, Show, Hide).
+GetNumberOption, GetName, GetX/Y/W/H, SetX/Y/W/H, Show, Hide). io.open, io.lines, dofile,
+loadfile and require take paths as Windows does: backslashes and any letter case.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 from raintux.core.formula import FormulaError, evaluate, parse_number
+from raintux.core.ini_writer import detect_encoding
+from raintux.core.paths import resolve_ci, windows_to_posix
 from raintux.measures.base_measure import Measure, trim_number
 
 
@@ -68,8 +72,13 @@ local function wrap_meter(h)
   return o
 end
 -- Windows Lua reads files in text mode, which drops the \r of CRLF line ends; skins rely on it.
+-- Paths are as Windows takes them: backslashes and any letter case (py.fspath).
 do
-  local real_open, real_lines = io.open, io.lines
+  local real_open, real_lines, real_loadfile, real_dofile = io.open, io.lines, loadfile, dofile
+  local function fs(path)
+    if type(path) == 'string' then return py.fspath(path) end
+    return path
+  end
   local function text_file(content)
     content = content:gsub('\r\n', '\n')
     local pos, f = 1, {}
@@ -122,6 +131,7 @@ do
   end
   io.open = function(path, mode)
     mode = mode or 'r'
+    path = fs(path)
     if mode:find('[wa+b]') then return real_open(path, mode) end
     local h, err = real_open(path, 'rb')
     if not h then return nil, err end
@@ -134,6 +144,34 @@ do
     local f, err = io.open(path, 'r')
     if not f then error(err, 2) end
     return f:lines()
+  end
+  loadfile = function(path) return real_loadfile(fs(path)) end
+  -- Rainmeter's dofile: UTF-8 BOM / UTF-16 files load; a missing or broken file is logged, not raised.
+  dofile = function(path)
+    if path == nil then return real_dofile() end
+    local src, name = py.source(path)
+    if src == nil then return end
+    local chunk, err = (loadstring or load)(src, name)
+    if not chunk then py.warn(err) return end
+    return chunk()
+  end
+  -- require's Lua file searcher, with package.path templates such as #@#Scripts\?.lua.
+  local searchers = package.loaders or package.searchers
+  searchers[2] = function(name)
+    local fname = name:gsub('%.', '/')
+    local tried = {}
+    for tpl in package.path:gmatch('[^;]+') do
+      local file = fs((tpl:gsub('%?', function() return fname end)))
+      local h = real_open(file, 'r')
+      if h then
+        h:close()
+        local chunk, err = real_loadfile(file)
+        if not chunk then error("error loading module '" .. name .. "' from file '" .. file .. "':\n\t" .. err, 0) end
+        return chunk
+      end
+      tried[#tried + 1] = "\n\tno file '" .. file .. "'"
+    end
+    return table.concat(tried)
   end
 end
 SKIN = {}
@@ -267,6 +305,27 @@ class _Api:
     def log(self, *args: Any) -> None:
         log.info("[%s] %s", self.m.name, " ".join(_lua_str(a) for a in args))
 
+    def warn(self, *args: Any) -> None:
+        log.error("[%s] %s", self.m.name, " ".join(_lua_str(a) for a in args))
+
+    def fspath(self, p: Any) -> str:
+        """A path from Lua file functions as Windows takes it: backslashes, a drive, any letter case."""
+        raw = _lua_str(p)
+        if not raw or os.path.exists(raw):
+            return raw
+        path = Path(windows_to_posix(raw))
+        return str(resolve_ci(path if path.is_absolute() else Path.cwd() / path))
+
+    def source(self, p: Any) -> tuple[str, str] | None:
+        """``dofile``: the script's text (UTF-8, maybe with BOM, or UTF-16) and its chunk name."""
+        path = Path(self.fspath(p))
+        try:
+            raw = path.read_bytes()
+        except OSError as e:
+            log.warning("[%s] dofile: cannot read %s: %s", self.m.name, path, e)
+            return None
+        return raw.decode(detect_encoding(raw), errors="replace"), "@" + path.name
+
 
 class ScriptMeasure(Measure):
     def read_measure(self) -> None:
@@ -291,8 +350,6 @@ class ScriptMeasure(Measure):
             return
         path = self.skin.path(self.script_file)
         try:
-            from raintux.core.ini_writer import detect_encoding
-
             raw = Path(path).read_bytes()
             source = raw.decode(detect_encoding(raw), errors="replace")  # Rainmeter accepts UTF-16 scripts
         except OSError as e:
