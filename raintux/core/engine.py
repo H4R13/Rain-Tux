@@ -710,6 +710,15 @@ class RainTuxEngine:
                     a.window.fade_to(a.skin.state.alpha / 255.0, fade)
                 else:
                     a.window.fade_to(0.0, fade)
+        elif name == "fadewindow" and len(args) >= 2:
+            # Lua SKIN:FadeWindow(from, to): opacity from -> to over FadeDuration; the skin's
+            # transparency setting is left as it is.
+            start, end = (max(0, min(255, int(parse_number(v, 0)))) for v in args[:2])
+            for a in target(2):
+                if end > 0:
+                    a.window.set_visible(True)
+                a.window.set_opacity(start / 255.0)
+                a.window.fade_to(end / 255.0, a.skin.state.fade_duration)
         elif name in ("activateconfig", "toggleconfig") and args:
             cfg = args[0]
             file = args[1] if len(args) > 1 else None

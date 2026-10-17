@@ -27,6 +27,7 @@ class StringMeter(Meter):
     # Defaults for [Meter:X] lookups from sections read before this meter.
     h_align = "left"
     v_align = "top"
+    text_override: str | None = None  # Lua meter:SetText, until the options are next read
 
     def read_meter(self) -> None:
         self.face = self.get("fontface", "Arial") or "Arial"
@@ -62,8 +63,14 @@ class StringMeter(Meter):
             self.inline_specs.append((setting, self.opts.get("inlinepattern" + sfx, ".*")))
             i += 1
         self.text = ""
+        self.text_override = None
         self.style = T.TextStyle()
         self.shadows: list[tuple[int, int, float, float, Any]] = []
+
+    def set_text(self, text: str) -> None:
+        """Lua ``meter:SetText``: replaces the Text option as given (no variables, ``%1`` still
+        filled in) until the meter re-reads its options, so DynamicVariables=1 undoes it."""
+        self.text_override = text
 
     # -- content -----------------------------------------------------------------
     def measure_text(self, index: int) -> str:
@@ -77,10 +84,13 @@ class StringMeter(Meter):
         return m.string_value(d, self.auto_scale, self.scale, self.percentual)
 
     def build_text(self) -> str:
-        raw = self.option_raw("text")
-        if raw is None:
-            raw = "%1" if self.measures else ""
-        text = self.skin.resolve(raw, section_vars=True)
+        if self.text_override is not None:
+            text = self.text_override
+        else:
+            raw = self.option_raw("text")
+            if raw is None:
+                raw = "%1" if self.measures else ""
+            text = self.skin.resolve(raw, section_vars=True)
         if self.measures:
             text = _PERCENT_N.sub(lambda m: self.measure_text(int(m.group(1)) - 1) if 0 < int(m.group(1)) <= len(self.measures) else m.group(0), text)
         prefix = self.skin.resolve(self.option_raw("prefix") or "", section_vars=True)

@@ -1,13 +1,15 @@
 """``Measure=Script``: Lua scripts with Rainmeter's SKIN / SELF API (via ``lupa``).
 
 Supported: ``Initialize()``, ``Update()`` (number or string result), ``!CommandMeasure``
-with Lua code, inline ``[&Script:func()]`` section variables, ``print``, and
-SKIN:Bang / GetMeasure / GetMeter / GetVariable / ReplaceVariables / ParseFormula /
-MakePathAbsolute / GetX / GetY / GetW / GetH; measure objects (GetValue,
-GetStringValue, GetRelativeValue, GetMinValue, GetMaxValue, GetValueRange, GetOption,
-GetNumberOption, GetName, Enable, Disable) and meter objects (GetOption,
-GetNumberOption, GetName, GetX/Y/W/H, SetX/Y/W/H, Show, Hide). io.open, io.lines, dofile,
-loadfile and require take paths as Windows does: backslashes and any letter case.
+with Lua code, inline ``[&Script:func()]`` section variables, ``print``, ``tolua.cast``, and
+SKIN:Bang / GetMeasure / GetMeter / SetOption / SetOptionGroup / GetVariable / SetVariable /
+ReplaceVariables / ParseFormula / MoveWindow / FadeWindow / MakePathAbsolute / ReadTextFile /
+WriteTextFile / GetX / GetY / GetW / GetH; measure objects (GetValue, GetStringValue,
+GetRelativeValue, GetMinValue, GetMaxValue, GetValueRange, GetOption, SetOption,
+GetNumberOption, GetName, Enable, Disable) and meter objects (GetOption, SetOption,
+GetNumberOption, GetName, GetX/Y/W/H, SetX/Y/W/H, Show, Hide, SetText). SetOption and
+SetVariable take ``(name, value)`` or any number of ``{name, value}`` tables. io.open, io.lines,
+dofile, loadfile and require take paths as Windows does: backslashes and any letter case.
 """
 
 from __future__ import annotations
@@ -32,11 +34,39 @@ def _lua_str(v: Any) -> str:
     return str(v)
 
 
+def _lua_int(v: Any) -> int:
+    """C's ``(int)lua_tonumber(L, n)``: truncated toward zero."""
+    try:
+        return int(float(v))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 log = logging.getLogger(__name__)
 
 # Lua side of the API: thin tables whose methods call back into Python (``py``).
 _PRELUDE = r"""
 local py = ...
+-- lua_isstring: strings and numbers.
+local function isstr(v) return type(v) == 'string' or type(v) == 'number' end
+-- LuaHelper::ToWide: a string or number as text, anything else as ''.
+local function wstr(v) if isstr(v) then return tostring(v) end return '' end
+-- LuaSection::SetOption / SKIN:SetVariable arguments: (name, value) or any number of
+-- {name, value} tables; a pair whose name is not a string or value not a string/number is skipped.
+local function each_pair(fn, ...)
+  if type((...)) == 'table' then
+    for i = 1, select('#', ...) do
+      local t = select(i, ...)
+      if type(t) == 'table' then
+        local k, v = rawget(t, 1), rawget(t, 2)
+        if type(k) == 'string' and isstr(v) then fn(k, tostring(v)) end
+      end
+    end
+  else
+    local k, v = ...
+    if isstr(k) and isstr(v) then fn(tostring(k), tostring(v)) end
+  end
+end
 local function wrap_measure(h)
   if h == nil then return nil end
   local o = {}
@@ -47,6 +77,7 @@ local function wrap_measure(h)
   function o:GetMaxValue() return py.mmax(h) end
   function o:GetValueRange() return py.mmax(h) - py.mmin(h) end
   function o:GetOption(k, d) return py.opt(h, k, d or '') end
+  function o:SetOption(...) each_pair(function(k, v) py.setoption(h, k, v, false) end, ...) end
   function o:GetNumberOption(k, d) return py.nopt(h, k, d or 0) end
   function o:GetName() return py.name(h) end
   function o:Enable() py.enable(h, true) end
@@ -57,8 +88,10 @@ local function wrap_meter(h)
   if h == nil then return nil end
   local o = {}
   function o:GetOption(k, d) return py.opt(h, k, d or '') end
+  function o:SetOption(...) each_pair(function(k, v) py.setoption(h, k, v, false) end, ...) end
   function o:GetNumberOption(k, d) return py.nopt(h, k, d or 0) end
   function o:GetName() return py.name(h) end
+  function o:SetText(s) py.settext(h, wstr(s)) end
   function o:GetX() return py.geom(h, 'x') end
   function o:GetY() return py.geom(h, 'y') end
   function o:GetW() return py.geom(h, 'w') end
@@ -178,15 +211,25 @@ SKIN = {}
 function SKIN:Bang(...) py.bang(...) end
 function SKIN:GetMeasure(n) return wrap_measure(py.measure(n)) end
 function SKIN:GetMeter(n) return wrap_meter(py.meter(n)) end
+function SKIN:SetOption(s, ...) s = wstr(s) each_pair(function(k, v) py.setoption(s, k, v, false) end, ...) end
+function SKIN:SetOptionGroup(g, ...) g = wstr(g) each_pair(function(k, v) py.setoption(g, k, v, true) end, ...) end
 function SKIN:GetVariable(n, d) local v = py.var(n) if v == nil then return d end return v end
+function SKIN:SetVariable(...) each_pair(py.setvariable, ...) end
 function SKIN:ReplaceVariables(s) return py.replace(s) end
 function SKIN:ParseFormula(s) return py.formula(s) end
+function SKIN:MoveWindow(x, y) py.movewindow(tonumber(x) or 0, tonumber(y) or 0) end
+function SKIN:FadeWindow(from, to) py.fadewindow(tonumber(from) or 0, tonumber(to) or 0) end
 function SKIN:MakePathAbsolute(p) return py.abspath(p) end
+function SKIN:ReadTextFile(p) return py.readtext(wstr(p)) end
+function SKIN:WriteTextFile(p, text, enc) return py.writetext(wstr(p), wstr(text), isstr(enc) and tostring(enc) or nil) end
 function SKIN:GetX() return py.skingeom('x') end
 function SKIN:GetY() return py.skingeom('y') end
 function SKIN:GetW() return py.skingeom('w') end
 function SKIN:GetH() return py.skingeom('h') end
 SELF = wrap_measure(py.self())
+-- Old scripts cast what SKIN:GetMeasure returns: tolua.cast(m, 'CMeasure'); the value is already usable.
+tolua = {cast = function(x) return x end}
+package.loaded.tolua = tolua
 print = function(...) py.log(...) end
 __raintux_deadline = math.huge
 debug.sethook(function()
@@ -272,6 +315,19 @@ class _Api:
         if mt is not None:
             mt.hidden = on
 
+    def settext(self, h: Any, text: str) -> None:
+        """meter:SetText: String and TextEdit meters only; anything else ignores it."""
+        set_text = getattr(self.skin.meter(str(h)), "set_text", None)
+        if set_text is not None:
+            set_text(text)
+
+    def setoption(self, section: str, key: str, value: str, group: bool) -> None:
+        """Skin::SetOption: the value is stored raw (its variables resolve when the section re-reads,
+        on its next update) and nothing updates now. ``Group=Name`` targets a group, as in Rainmeter."""
+        if section.startswith("Group="):
+            section, group = section[6:], True
+        self.skin.bang("setoptiongroup" if group else "setoption", [section, key, value])
+
     def bang(self, *args: Any) -> None:
         parts = [_lua_str(a) for a in args]
         if not parts:
@@ -286,6 +342,17 @@ class _Api:
     def var(self, name: Any) -> str | None:
         return self.skin.get_variable(str(name))
 
+    def setvariable(self, name: str, value: str) -> None:
+        """Skin::SetVariable, like !SetVariable: a value in parentheses is evaluated first."""
+        self.skin.bang("setvariable", [name, value])
+
+    def movewindow(self, x: Any, y: Any) -> None:
+        self.skin.bang("move", [str(_lua_int(x)), str(_lua_int(y))])
+
+    def fadewindow(self, start: Any, end: Any) -> None:
+        # Not a bang: Rainmeter has no !FadeWindow, so the name stays out of HOST_BANGS.
+        self.skin.host.host_bang(self.skin, "fadewindow", [str(_lua_int(start)), str(_lua_int(end))])
+
     def replace(self, s: Any) -> str:
         return self.skin.resolve(_lua_str(s), section_vars=True)
 
@@ -297,6 +364,35 @@ class _Api:
 
     def abspath(self, p: Any) -> str:
         return str(self.skin.path(str(p)))
+
+    def readtext(self, p: str) -> str | tuple[None, str]:
+        """SKIN:ReadTextFile: the text (BOM-detected encoding, CRLF read as LF), or nil and a message."""
+        path = self.skin.path(p)
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return None, f"Unable to read file: {path}"
+        return raw.decode(detect_encoding(raw), errors="replace").replace("\r\n", "\n")
+
+    def writetext(self, p: str, text: str, encoding: str | None) -> bool | tuple[bool, str]:
+        """SKIN:WriteTextFile: UTF-8 with BOM (or ANSI), CRLF line ends; true, or false and a message.
+
+        Rainmeter accepts "UTF-16" but writes UTF-8 for it all the same; so does this.
+        """
+        codec = "utf-8-sig"
+        if encoding is not None:
+            name = encoding.lower()
+            if name == "ansi":
+                codec = "cp1252"
+            elif name not in ("utf-8", "utf-16"):
+                return False, f"Unknown encoding: {encoding}"
+        path = self.skin.path(p)
+        data = text.replace("\r\n", "\n").replace("\n", "\r\n").encode(codec, errors="replace")
+        try:
+            path.write_bytes(data)
+        except OSError:
+            return False, f"Unable to write file: {path}"
+        return True
 
     def skingeom(self, which: str) -> float:
         st = self.skin.state

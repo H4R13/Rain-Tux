@@ -352,3 +352,172 @@ def test_transparent_image_mouse_region_takes_clicks(tmp_path: Path) -> None:
     skin.mouse("down", 20, 20)  # not consumed: a press may still start a window drag
     assert skin.mouse("up", 20, 20)
     assert skin.get_variable("Started") == "1"
+
+
+def test_lua_tolua_cast_and_set_option(tmp_path: Path) -> None:
+    pytest.importorskip("lupa")
+    skin, _ = make_skin(tmp_path, """
+        [Variables]
+        Color=0,0,255
+
+        [MeasureCalc]
+        Measure=Calc
+        Formula=1
+
+        [MeterA]
+        Meter=String
+        Group=Labels
+        Text=a
+
+        [MeterB]
+        Meter=String
+        Group=Labels
+        Text=b
+
+        [MeasureScript]
+        Measure=Script
+        ScriptFile=s.lua
+    """, files={"Test/s.lua": """
+        function Initialize()
+          local calc = tolua.cast(SKIN:GetMeasure('MeasureCalc'), 'CMeasure')  -- pre-3.0 scripts
+          calc:SetOption('Formula', '(2+3)')
+          SKIN:SetOption('MeterA', 'FontColor', '#Color#')
+          SKIN:SetOptionGroup('Labels', 'FontSize', 20)
+          SKIN:SetOption('MeterB', {'X', '7'}, {'Y', 8}, {5, 'skipped'}, 'skipped')
+          SKIN:SetOption('Group=Labels', 'Prefix', '>')
+          SKIN:GetMeter('MeterA'):SetOption('Postfix', '<')
+          cast_name = calc:GetName()
+        end
+    """})
+    a, b = skin.meter("MeterA"), skin.meter("MeterB")
+    assert a.option_raw("FontColor") == "#Color#"  # stored raw, resolved when the meter reads it
+    skin.update()
+    assert skin.measure("MeasureScript")._lua.globals().cast_name == "MeasureCalc"
+    assert skin.measure("MeasureCalc").value == 5
+    assert a.color_ == (0.0, 0.0, 1.0, 1.0)
+    assert a.size == b.size == 20
+    assert (b.option_raw("X"), b.option_raw("Y"), b.option_raw("5")) == ("7", "8", None)
+    assert (a.text, b.text) == (">a<", ">b")
+
+
+def test_lua_set_variable_and_window_calls(tmp_path: Path) -> None:
+    pytest.importorskip("lupa")
+    skin, host = make_skin(tmp_path, """
+        [MeasureScript]
+        Measure=Script
+        ScriptFile=s.lua
+    """, files={"Test/s.lua": """
+        function Initialize()
+          SKIN:SetVariable('Sum', '(2*3)')
+          SKIN:SetVariable({'Name', 'x y'}, {'Ratio', 1.5}, {'Skipped'})
+          SKIN:MoveWindow(10.7, '20')
+          SKIN:FadeWindow(255, 0)
+        end
+    """})
+    assert [skin.get_variable(n) for n in ("Sum", "Name", "Ratio", "Skipped")] == ["6", "x y", "1.5", None]
+    assert ("move", ["10", "20"]) in host.host_bangs
+    assert ("fadewindow", ["255", "0"]) in host.host_bangs
+
+
+@pytest.mark.gtk
+def test_fade_window_fades_between_the_given_values(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from raintux.core.engine import RainTuxEngine
+
+    calls: list[tuple] = []
+    window = SimpleNamespace(set_visible=lambda v: calls.append(("visible", v)),
+                             set_opacity=lambda v: calls.append(("opacity", v)),
+                             fade_to=lambda v, ms: calls.append(("fade", v, ms)))
+    skin, _ = make_skin(tmp_path, "[MeterA]\nMeter=Image\n")
+    skin.state.fade_duration = 300
+    act = SimpleNamespace(skin=skin, window=window)
+    engine = SimpleNamespace(_act=lambda s: act, active={})
+    RainTuxEngine.host_bang(engine, skin, "fadewindow", ["0", "255"])  # type: ignore[arg-type]
+    assert calls == [("visible", True), ("opacity", 0.0), ("fade", 1.0, 300)]
+
+
+def test_lua_read_and_write_text_files(tmp_path: Path) -> None:
+    pytest.importorskip("lupa")
+    root = tmp_path / "Skins" / "Test"
+    (root / "Data").mkdir(parents=True)
+    (root / "Data" / "Notes.txt").write_bytes(b"\xff\xfe" + "line1\r\nlíne2".encode("utf-16-le"))
+    skin, _ = make_skin(tmp_path, """
+        [MeasureScript]
+        Measure=Script
+        ScriptFile=s.lua
+    """, files={"Test/s.lua": """
+        function Initialize()
+          notes = SKIN:ReadTextFile('data\\\\NOTES.txt')
+          missing, missing_err = SKIN:ReadTextFile('nope.txt')
+          ok = SKIN:WriteTextFile('out.txt', 'a\\nb\\r\\nc')
+          back = SKIN:ReadTextFile('out.txt')
+          ansi_ok = SKIN:WriteTextFile('ansi.txt', 'é', 'ansi')
+          bad_ok, bad_err = SKIN:WriteTextFile('bad.txt', 'x', 'UTF-32')
+          nodir_ok, nodir_err = SKIN:WriteTextFile('no\\\\dir\\\\x.txt', 'x')
+        end
+    """})
+    g = skin.measure("MeasureScript")._lua.globals()
+    assert g.notes == "line1\nlíne2"  # BOM-detected encoding, CRLF read as LF
+    assert g.missing is None and g.missing_err == f"Unable to read file: {root / 'nope.txt'}"
+    assert g.ok is True and g.back == "a\nb\nc"
+    assert (root / "out.txt").read_bytes() == b"\xef\xbb\xbfa\r\nb\r\nc"  # UTF-8 BOM, CRLF
+    assert g.ansi_ok is True and (root / "ansi.txt").read_bytes() == b"\xe9"
+    assert g.bad_ok is False and g.bad_err == "Unknown encoding: UTF-32" and not (root / "bad.txt").exists()
+    assert g.nodir_ok is False and g.nodir_err.startswith("Unable to write file: ")
+
+
+def test_lua_meter_set_text(tmp_path: Path) -> None:
+    pytest.importorskip("lupa")
+    skin, _ = make_skin(tmp_path, """
+        [MeasureCalc]
+        Measure=Calc
+        Formula=7
+
+        [MeasureScript]
+        Measure=Script
+        ScriptFile=s.lua
+
+        [MeterText]
+        Meter=String
+        MeasureName=MeasureCalc
+        Text=old %1
+
+        [MeterDynamic]
+        Meter=String
+        Text=kept
+        DynamicVariables=1
+
+        [MeterImage]
+        Meter=Image
+    """, files={"Test/s.lua": """
+        function Update()
+          SKIN:GetMeter('MeterText'):SetText('new #X# %1')
+          SKIN:GetMeter('MeterDynamic'):SetText('lost')  -- re-read every update, as in Rainmeter
+          SKIN:GetMeter('MeterImage'):SetText('ignored')
+          return 0
+        end
+    """})
+    skin.update()
+    skin.update()
+    assert skin.meter("MeterText").text == "new #X# 7"
+    assert skin.meter("MeterDynamic").text == "kept"
+    skin.execute("[!SetOption MeterText Text again][!UpdateMeter MeterText]")  # a re-read drops it
+    assert skin.meter("MeterText").text == "again"
+
+
+@pytest.mark.gtk
+def test_lua_text_edit_set_text(tmp_path: Path) -> None:
+    pytest.importorskip("lupa")
+    skin, _ = make_skin(tmp_path, """
+        [MeterInput]
+        Meter=TextEdit
+        W=100
+        H=20
+
+        [MeasureScript]
+        Measure=Script
+        ScriptFile=s.lua
+    """, files={"Test/s.lua": "function Initialize() SKIN:GetMeter('MeterInput'):SetText('typed') end\n"})
+    skin.update()
+    assert skin.meter("MeterInput").edit_text == "typed"
