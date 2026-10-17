@@ -204,8 +204,12 @@ class WindowState:
     alpha: int = 255
     fade_duration: int = 250
     hide_on_mouse_over: bool = False
-    anchor_x: str = "0"
+    anchor_x: str = "0"  # AnchorX / AnchorY as written (pixels, %, R / B)
     anchor_y: str = "0"
+    # WindowX / WindowY as written in a layout or a skin's DefaultWindowX (formulas, R / B, %, @N):
+    # worked out into x / y whenever the skin is placed, and dropped once the skin is moved.
+    window_x: str | None = None
+    window_y: str | None = None
 
 
 class RainmeterSection(Section):

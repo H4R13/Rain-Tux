@@ -21,6 +21,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk
 from raintux.core.bangs import split_args, split_commands
 from raintux.core.config import RainTuxConfig, default_skins_roots, load_config
 from raintux.core.formula import parse_number
+from raintux.core.position import Rect, anchor_offset, apply_skin_defaults, authored_position
 from raintux.core.skin import Skin
 from raintux.core.state import AppState, load_state, save_state
 from raintux.wayland.compositor_detect import CompositorKind, detect_compositor
@@ -35,6 +36,14 @@ DEFAULT_LAYOUT = [  # first launch: (config, file, column); the right column sta
     (r"RainTux\System", "System.ini", "right"),
     (r"RainTux\Network", "Network.ini", "right"),
 ]
+# Bangs from outside (command line, API) that act on the app, on configs by name or on groups.
+_APP_BANGS = frozenset({
+    "refreshapp", "quit", "restart", "manage", "about", "debug", "traymenu", "setclip", "loadlayout",
+    "activateconfig", "toggleconfig", "deactivateconfiggroup", "refreshgroup",
+    "showgroup", "hidegroup", "togglegroup", "showfadegroup", "hidefadegroup", "togglefadegroup",
+    "updategroup", "redrawgroup", "disablemouseactionskingroup", "enablemouseactionskingroup",
+    "togglemouseactionskingroup", "clearmouseactionskingroup",
+})
 
 
 def _on_main_thread(fn: Callable[..., _T], *args: Any, timeout: float = 30.0) -> _T:
@@ -68,6 +77,7 @@ class ActiveSkin:
         self.skin = skin
         self.window = window
         self.timer = 0
+        self.size: tuple[int, int] | None = None  # skin size when it was last placed
 
     @property
     def ini_path(self) -> Path:
@@ -175,6 +185,7 @@ class RainTuxEngine:
         if found is None:
             raise FileNotFoundError(config)
         root, folder = found
+        first_run = not self.state.has(config)
         if file is None:
             cs = self.state.config(config)
             file = cs.active_file or (sorted(p.name for p in folder.glob("*.ini")) or [None])[0]
@@ -183,11 +194,13 @@ class RainTuxEngine:
         ini = (folder / file).resolve()
         if not ini.is_relative_to(folder) or not ini.is_file():
             raise FileNotFoundError(f"{config}\\{file}")
-        return self._activate(ini, root)
+        return self._activate(ini, root, first_run)
 
-    def _activate(self, ini: Path, root: Path) -> Skin:
+    def _activate(self, ini: Path, root: Path, first_run: bool | None = None) -> Skin:
         config, _ = self._split_id(ini)
         key = config.lower()
+        if first_run is None:
+            first_run = not self.state.has(config)
         cs = self.state.config(config)
         existing = self.active.get(key)
         if existing is not None:
@@ -202,6 +215,8 @@ class RainTuxEngine:
                 existing.window.destroy()
                 self.active.pop(key, None)
             raise
+        if first_run:
+            apply_skin_defaults(cs.window, skin.rm.option_raw, self._monitor_rects(), skin.resolve)
         if existing is not None:
             window = existing.window
             window.set_skin(skin)
@@ -211,6 +226,10 @@ class RainTuxEngine:
         self.active[key] = act
         cs.active_file = ini.name
         skin.start()
+        # Like Rainmeter's refresh: WindowX / WindowY formulas are worked out once the skin's
+        # first update has given it its size (AnchorX=50% needs it).
+        self._place_from_options(act)
+        act.size = (skin.width, skin.height)
         window.apply_state()
         window.present()
         if existing is None and cs.window.fade_duration > 0 and cs.window.alpha > 0:
@@ -298,7 +317,8 @@ class RainTuxEngine:
         from raintux.core.layouts import read_layout
 
         try:
-            configs = read_layout(layouts_root(), name, lambda c: self.list_configs().get(c.replace("/", "\\"), []))
+            configs = read_layout(layouts_root(), name, lambda c: self.list_configs().get(c.replace("/", "\\"), []),
+                                  self._monitor_rects())
         except (FileNotFoundError, ValueError, OSError) as e:
             log.warning("cannot load layout %s: %s", name, e)
             return
@@ -371,6 +391,7 @@ class RainTuxEngine:
             st = act.skin.state
             if x is not None or y is not None:
                 act.window.move_to(st.x if x is None else x, st.y if y is None else y)
+                st.window_x = st.window_y = None
             if alpha is not None:
                 st.alpha = int(max(0.0, min(1.0, alpha)) * 255)
             if click_through is not None:
@@ -435,6 +456,7 @@ class RainTuxEngine:
             else:
                 act.window.move_to(ox + sw - skin.width - 40, next_y)
                 next_y += skin.height + 16
+            self.window_moved(act.window)
 
     def shutdown(self) -> None:
         for act in list(self.active.values()):
@@ -481,6 +503,7 @@ class RainTuxEngine:
         act = self._act(skin)
         if act is not None:
             act.window.resize_canvas(width, height)
+            self._resized(act, width, height)
 
     def call_later(self, ms: int, fn: Callable[[], None]) -> Any:
         def run() -> bool:
@@ -648,8 +671,11 @@ class RainTuxEngine:
                 return
         Gio.AppInfo.launch_default_for_uri(path.as_uri(), None)
 
-    def host_bang(self, skin: Skin, name: str, args: list[str]) -> None:
-        """Bangs that act on windows, configs or the app (``!Refresh``, ``!Move``, ``!ActivateConfig``…)."""
+    def host_bang(self, skin: Skin | None, name: str, args: list[str]) -> None:
+        """Bangs that act on windows, configs or the app (``!Refresh``, ``!Move``, ``!ActivateConfig``…).
+
+        ``skin`` is the skin that ran the bang; None when it came from outside (command line, API).
+        """
 
         def target(idx: int) -> list[ActiveSkin]:
             if len(args) > idx and args[idx].strip():
@@ -658,7 +684,7 @@ class RainTuxEngine:
                     return list(self.active.values())
                 a = self.active.get(cfg.replace("/", "\\").lower())
                 return [a] if a else []
-            a = self._act(skin)
+            a = self._act(skin) if skin is not None else None
             return [a] if a else []
 
         def flag(value: str, current: bool) -> bool:
@@ -734,7 +760,8 @@ class RainTuxEngine:
             for a in self._group(args[0]):
                 GLib.idle_add(lambda c=a.skin.config: (self.deactivate_config(c), GLib.SOURCE_REMOVE)[1])
         elif name in ("manage", "about"):
-            self.show_manage(skin.config if name == "manage" and not args else (args[1] if len(args) > 1 else None))
+            self.show_manage(skin.config if skin is not None and name == "manage" and not args
+                             else (args[1] if len(args) > 1 else None))
         elif name == "skinmenu":
             for a in target(0):
                 self.show_context_menu(a.window, 10, 10)
@@ -749,7 +776,7 @@ class RainTuxEngine:
             display = Gdk.Display.get_default()
             if display is not None:
                 display.get_clipboard().set(args[0])
-        elif name == "setwallpaper" and args:
+        elif name == "setwallpaper" and args and skin is not None:
             set_wallpaper(skin.path(args[0]))
         elif name in ("showgroup", "hidegroup", "togglegroup", "showfadegroup", "hidefadegroup", "togglefadegroup") and args:
             for a in self._group(args[0]):
@@ -829,17 +856,9 @@ class RainTuxEngine:
             name = args[0].lower()
             if name.startswith("rainmeter"):
                 name = name[len("rainmeter"):]
-            if name in ("refreshapp", "quit", "manage", "about", "activateconfig", "toggleconfig",
-                        "deactivateconfiggroup", "refreshgroup", "loadlayout"):
-                anchor = next(iter(self.active.values()), None)
-                if name == "manage":
-                    self.show_manage(args[1] if len(args) > 1 else None)
-                elif anchor is not None:
-                    self.host_bang(anchor.skin, name, args[1:])
-                elif name in ("activateconfig", "toggleconfig") and len(args) > 1:
-                    self._safe_activate(args[1], args[2] if len(args) > 2 else None)
-                elif name == "quit":
-                    self.app.quit()
+            if name in _APP_BANGS:
+                # Not tied to one skin: runs the same with no skin loaded, or with many.
+                self.host_bang(None, name, args[1:])
                 continue
             # Other bangs carry the target config as their last argument.
             for a in list(self.active.values()):
@@ -898,9 +917,41 @@ class RainTuxEngine:
         return (x, y)
 
     def window_moved(self, window: SkinWindow) -> None:
+        st = window.skin.state
+        st.window_x = st.window_y = None  # placed somewhere else: x / y hold the position now
         window.skin.invalidate_builtins()
-        if window.skin.state.save_position:
+        if st.save_position:
             self.schedule_save()
+
+    def _monitor_rects(self) -> list[Rect]:
+        return [(g.x, g.y, g.width, g.height) for g in (m.get_geometry() for m in monitors())]
+
+    def _place_from_options(self, act: ActiveSkin) -> bool:
+        """Put the skin where WindowX / WindowY as written say (formulas, R / B, %, @N, anchors)."""
+        st = act.skin.state
+        pos = authored_position(st, (act.skin.width, act.skin.height), self._monitor_rects(), act.window.zoom)
+        if pos is None:
+            return False
+        x, y = self.clamp_on_screen(act.window, *pos) if st.keep_on_screen else pos
+        act.window.move_to(x, y)
+        return True
+
+    def _resized(self, act: ActiveSkin, width: int, height: int) -> None:
+        """Rainmeter places a skin again when its size changes: its anchor point stays where it
+        was (AnchorX=50% keeps it centred) and KeepOnScreen holds."""
+        old = act.size
+        if old is None or old == (width, height):
+            return  # not placed yet (its first update), or no change
+        act.size = (width, height)
+        if self._place_from_options(act):
+            return
+        st, zoom = act.skin.state, act.window.zoom
+        x = st.x + anchor_offset(st.anchor_x, old[0], zoom, "R") - anchor_offset(st.anchor_x, width, zoom, "R")
+        y = st.y + anchor_offset(st.anchor_y, old[1], zoom, "B") - anchor_offset(st.anchor_y, height, zoom, "B")
+        if st.keep_on_screen:
+            x, y = self.clamp_on_screen(act.window, x, y)
+        if (x, y) != (st.x, st.y):
+            act.window.move_to(x, y)
 
 
 _cursor_cache: dict[str, Any] = {}

@@ -39,6 +39,11 @@ class AppState:
         self.configs[key] = cs
         return cs
 
+    def has(self, name: str) -> bool:
+        """The config has settings already (Rainmeter's "has a section in Rainmeter.ini")."""
+        key = name.replace("/", "\\").lower()
+        return any(k.lower() == key for k in self.configs)
+
     def active(self) -> list[tuple[str, ConfigState]]:
         items = [(k, v) for k, v in self.configs.items() if v.active_file]
         items.sort(key=lambda kv: (kv[1].load_order, kv[0].lower()))
@@ -55,15 +60,29 @@ def load_state(path: Path | None = None) -> AppState:
         log.warning("could not read %s; starting with defaults", p)
         return AppState()
     st = AppState(first_run_done=bool(raw.get("first_run_done", False)))
-    known = set(WindowState.__dataclass_fields__)
     for name, cs in (raw.get("configs") or {}).items():
-        win = {k: v for k, v in (cs.get("window") or {}).items() if k in known}
         st.configs[name] = ConfigState(
             active_file=cs.get("active_file"),
             load_order=int(cs.get("load_order", 0)),
-            window=WindowState(**win),
+            window=window_state(cs.get("window") or {}),
         )
     return st
+
+
+def window_state(raw: dict) -> WindowState:
+    """WindowState from saved JSON. Text in ``x`` / ``y`` (a formula, ``20R``, ``50%``) is taken
+    as WindowX / WindowY as written, to be worked out when the skin is placed."""
+    known = set(WindowState.__dataclass_fields__)
+    win = {k: v for k, v in raw.items() if k in known}
+    for axis in ("x", "y"):
+        v = win.get(axis)
+        if isinstance(v, (int, float)):
+            win[axis] = int(v)
+        elif v is not None:
+            if win.get(f"window_{axis}") is None:
+                win[f"window_{axis}"] = str(v)
+            win[axis] = 0
+    return WindowState(**win)
 
 
 def save_state(state: AppState, path: Path | None = None) -> None:
