@@ -53,6 +53,16 @@ each package in the right one. The first launch loads the bundled **RainTux** su
 Clock, System, Network) and also installs **illustro** (RainTux edition), Rainmeter's classic
 starter suite adapted for Linux.
 
+### Editing skins
+
+Just like in Rainmeter: right-click a skin and choose **Edit skin** to open its `.ini` in your
+text editor (the `editor` setting in `~/.config/raintux/config.toml`, else `$VISUAL`/`$EDITOR`,
+else your default app). Save, then right-click → **Refresh skin**. Skins are plain files, so you
+can copy, rename and extend them freely. For example, to show four drives in illustro's
+`Disk\2 Disks.ini`, copy the `measure…Disk2` and `meter…Disk2` sections, rename them `Disk3` and
+`Disk4`, move them down with new `Y=` values, and point each `diskN=` variable at a folder (`/`,
+`/home`, `/mnt/data`…). The HOWTO at the top of that file walks through it step by step.
+
 ## What is supported
 
 Practically everything a skin uses on Windows, implemented natively (details in
@@ -89,6 +99,45 @@ Practically everything a skin uses on Windows, implemented natively (details in
 
 Not possible on Linux: Windows-only plugin DLLs (packages that ship them still install; those
 measures return 0), `Measure=Registry`, `PerfMon`, `ResMon`, `WindowMessage`, desktop blur.
+
+## Windows skins on Linux: what to expect
+
+`.rmskin` packages are made for Windows. RainTux translates what it can, so most skins work
+unchanged; where it can't, you may need to edit the skin (see [Editing skins](#editing-skins)).
+
+- **Drive letters.** `C:` means `/`. Other letters use `/mnt/<letter>` when it exists (that's
+  where WSL shows Windows drives), else the extra drives under `/media`, `/mnt` and `/run/media`
+  in order (`D:` is the first). To choose yourself, add a table to `~/.config/raintux/config.toml`:
+
+  ```toml
+  [drives]
+  D = "/home"
+  X = "/mnt/data"
+  ```
+
+  The numbers then come from the right place, but text the author typed (like a `C:\` label)
+  stays as written: edit the skin to show `/` instead.
+- **File paths.** Backslashes and any letter case work (`#@#Images\BG.PNG`); `%APPDATA%`,
+  `%USERPROFILE%` and similar point to Linux equivalents.
+- **Plugins (`.dll`).** These can't run on Linux. Common ones have built-in replacements
+  (NowPlaying via MPRIS, AudioLevel via PipeWire, WebParser, Power, SysInfo, RecycleManager via
+  the desktop Trash…); the rest give 0 or empty text, so those parts of a skin stay blank.
+- **Programs in click actions.** Links, files and folders open with your default apps, and
+  `explorer`/`notepad` open the file manager/text editor. Other Windows programs and settings
+  pages (`taskmgr.exe`, `shutdown.exe`, `control.exe`, `ms-settings:`, `shell:…`) don't exist on
+  Linux: change the action to a Linux command.
+- **Network adapters.** Windows adapter names don't exist here: use `Interface=0` (all) or a
+  Linux name such as `enp3s0` or `wlan0`.
+- **Process names.** `ProcessName=firefox.exe` matches `firefox`; programs that are named
+  differently on Linux need the Linux name.
+- **Fonts.** Windows fonts (Segoe UI, Trebuchet MS…) are replaced by similar free fonts; fonts a
+  skin ships in `@Resources/Fonts` are used as-is.
+- **Lua scripts.** They run as on Windows, but `os.execute`/`io.popen` calls to Windows commands
+  fail.
+- **Trash.** `EmptyBin` empties the desktop Trash right away, without the confirmation Windows
+  shows.
+- **Desktop.** On GNOME skins are normal windows (no desktop layer); "always on top" and
+  click-through depend on your compositor.
 
 ## Compositors
 

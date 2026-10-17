@@ -13,6 +13,10 @@
   says so instead of failing as a Lua script.
 - docs/ARCHITECTURE.md and CONTRIBUTING.md explain the code layout, the life of a skin, and
   where to add measures, meters, plugins and bangs.
+- Drive letters: a `[drives]` table in config.toml says which folder a Windows drive letter in a
+  skin means (`D = "/home"`); without one, a letter mounted at `/mnt/<letter>` (WSL) uses that
+  mount before the extra drives under /media, /mnt and /run/media.
+- README: how to edit skins, and what to expect from Windows `.rmskin` packages on Linux.
 
 ## Unreleased — tested with real skin packages
 

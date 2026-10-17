@@ -521,3 +521,35 @@ def test_lua_text_edit_set_text(tmp_path: Path) -> None:
     """, files={"Test/s.lua": "function Initialize() SKIN:GetMeter('MeterInput'):SetText('typed') end\n"})
     skin.update()
     assert skin.meter("MeterInput").edit_text == "typed"
+
+
+def test_windows_drive_letters_map_to_linux_folders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raintux.measures import disk_measure as dm
+
+    wsl_x = tmp_path / "mnt" / "x"
+    wsl_x.mkdir(parents=True)
+    monkeypatch.setattr(dm, "_MNT", tmp_path / "mnt")
+    monkeypatch.setattr(dm, "_is_mount", lambda p: p == str(wsl_x))
+    monkeypatch.setattr(dm, "_DRIVE_MAP", {})
+    assert dm.map_drive("C:") == "/"
+    assert dm.map_drive("x:\\") == str(wsl_x)  # WSL shows Windows drives at /mnt/<letter>
+    dm.set_drive_map({"d:": str(tmp_path), "C": "/srv"})  # config.toml [drives] wins
+    assert (dm.map_drive("D:"), dm.map_drive("C:")) == (str(tmp_path), "/srv")
+    skin, _ = make_skin(tmp_path, """
+        [MeasureDisk]
+        Measure=FreeDiskSpace
+        Drive=D:
+        Total=1
+    """)  # illustro's "2 Disks" on a PC whose user set D = their data folder
+    skin.update()
+    assert skin.measure("MeasureDisk").value > 0
+
+
+def test_drive_table_round_trips_through_config_toml(tmp_path: Path) -> None:
+    import tomllib
+
+    from raintux.core.config import RainTuxConfig, save_config
+
+    save_config(RainTuxConfig(drives={"D": "/home", "x:": "/mnt/data"}), tmp_path / "config.toml")
+    back = RainTuxConfig.model_validate(tomllib.loads((tmp_path / "config.toml").read_text(encoding="utf-8")))
+    assert back.drives == {"D": "/home", "X": "/mnt/data"}

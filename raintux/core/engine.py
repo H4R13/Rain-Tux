@@ -24,6 +24,7 @@ from raintux.core.formula import parse_number
 from raintux.core.position import Rect, anchor_offset, apply_skin_defaults, authored_position
 from raintux.core.skin import Skin
 from raintux.core.state import AppState, load_state, save_state
+from raintux.measures.disk_measure import set_drive_map
 from raintux.wayland.compositor_detect import CompositorKind, detect_compositor
 from raintux.wayland.layer_window import CaptureOverlay, SkinWindow, monitor_at, monitors
 
@@ -89,6 +90,7 @@ class RainTuxEngine:
 
     def __init__(self, config: RainTuxConfig, app: Gtk.Application) -> None:
         self.config = config
+        set_drive_map(config.drives)  # Windows drive letters in skins -> the user's folders
         self.app = app
         self.state: AppState = load_state()
         self.active: dict[str, ActiveSkin] = {}  # lower-case config -> skin

@@ -56,6 +56,8 @@ class RainTuxConfig(BaseModel):
     api: ApiConfig = Field(default_factory=ApiConfig)
     engine: EngineConfig = Field(default_factory=EngineConfig)
     ui: UiConfig = Field(default_factory=UiConfig)
+    # Windows drive letter -> Linux folder for skins made on Windows (``D = "/home"``).
+    drives: dict[str, str] = Field(default_factory=dict)
 
 
 def skins_root() -> Path:
@@ -147,7 +149,14 @@ def save_config(config: RainTuxConfig, path: Path | None = None) -> None:
         "[ui]",
         f"tray = {'true' if config.ui.tray else 'false'}",
         f"editor = {_s(config.ui.editor)}",
+        "",
+        "# Which Linux folder a Windows drive letter in a skin means. Without an entry, C: is /, a",
+        "# letter with a /mnt/<letter> mount uses it (WSL), and the others are the extra drives",
+        '# under /media, /mnt and /run/media in order. Example:  D = "/home"   X = "/mnt/data"',
+        "[drives]",
     ]
+    for letter, folder in sorted(config.drives.items()):
+        lines.append(f"{letter.strip().rstrip(':').upper()} = {_s(folder)}")
     tmp = cfg_path.with_suffix(".toml.tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     tmp.replace(cfg_path)

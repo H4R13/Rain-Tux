@@ -10,24 +10,43 @@ import psutil
 from raintux.measures.base_measure import Measure
 
 
+_DRIVE_MAP: dict[str, str] = {}  # the [drives] table of config.toml: "D" -> "/home"
+_MNT = Path("/mnt")
+_is_mount = os.path.ismount
+
+
+def set_drive_map(mapping: dict[str, str]) -> None:
+    """Use the user's drive letter -> folder table (keys like ``D`` or ``D:``)."""
+    _DRIVE_MAP.clear()
+    _DRIVE_MAP.update({k.strip().rstrip(":").upper(): v for k, v in mapping.items() if k.strip()})
+
+
 def map_drive(drive: str) -> str:
     """Translate a Windows ``Drive=`` into a Linux mount point.
 
-    ``C:`` is the root filesystem; other letters map to removable/extra mounts in
-    order (``D:`` = first non-root mount under /media, /mnt or /run/media), and
-    anything that is already a path is used as-is.
+    A letter set in the user's ``[drives]`` table wins. Otherwise ``C:`` is the root
+    filesystem, a letter mounted at ``/mnt/<letter>`` uses that mount (WSL shows Windows
+    drives there), and the remaining letters take the other mounts under /media, /mnt and
+    /run/media in order (``D:`` = the first). Anything that is already a path is used as-is.
     """
     d = drive.strip().strip('"').replace("\\", "/")
     if d.startswith(("/", "~")):
         return os.path.expanduser(d)
     if len(d) >= 2 and d[1] == ":":
         letter = d[0].upper()
+        if letter in _DRIVE_MAP:
+            return os.path.expanduser(_DRIVE_MAP[letter])
         if letter == "C":
             return "/"
+        own = _MNT / letter.lower()
+        if _is_mount(str(own)):
+            return str(own)
         extra = sorted(
             p.mountpoint
             for p in psutil.disk_partitions(all=False)
             if p.mountpoint.startswith(("/media", "/mnt", "/run/media"))
+            and not p.mountpoint.startswith("/mnt/wsl")
+            and not (len(p.mountpoint) == 6 and p.mountpoint.startswith("/mnt/"))  # /mnt/x: a letter's own
         )
         idx = ord(letter) - ord("D")
         if 0 <= idx < len(extra):
