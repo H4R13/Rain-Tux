@@ -153,6 +153,7 @@ typelib_present Gtk4LayerShell-1.0 \
 mkdir -p "$(dirname "$APP_DIR")"
 if [ -d "$APP_DIR/.git" ]; then
   say "Updating RainTux in $APP_DIR"
+  git -C "$APP_DIR" remote set-url origin "$REPO"
   git -C "$APP_DIR" fetch -q origin "$BRANCH"
   git -C "$APP_DIR" checkout -q "$BRANCH" 2>/dev/null || git -C "$APP_DIR" checkout -q -b "$BRANCH" "origin/$BRANCH"
   git -C "$APP_DIR" pull -q --ff-only origin "$BRANCH"
