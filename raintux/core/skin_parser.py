@@ -53,12 +53,19 @@ def substitute_variables(
     resources: Path | None = None,
     extra: dict[str, str] | None = None,
 ) -> str:
-    """Expand ``#NAME#`` placeholders (case-insensitive) up to a fixed recursion depth.
-
-    ``#*NAME*#`` is an escape that yields a literal ``#NAME#``.
-    """
+    """Expand ``#NAME#`` placeholders (case-insensitive); see :func:`expand_variables`."""
     if not text or "#" not in text:
         return text
+    return expand_variables(text, variable_table(variables, root, resources, extra))
+
+
+def variable_table(
+    variables: dict[str, str],
+    root: Path,
+    resources: Path | None = None,
+    extra: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Upper-cased name -> value for :func:`expand_variables`."""
     # Built-ins win over [Variables] (Rainmeter reserves them); ``extra`` carries the
     # skin's full set of built-ins and overrides the defaults here.
     merged = {k.upper(): v for k, v in variables.items()}
@@ -72,12 +79,22 @@ def substitute_variables(
     )
     if extra:
         merged.update({k.upper(): v for k, v in extra.items()})
+    return merged
+
+
+def expand_variables(text: str, table: dict[str, str]) -> str:
+    """Expand ``#NAME#`` placeholders from ``table`` up to a fixed recursion depth.
+
+    ``#*NAME*#`` is an escape that yields a literal ``#NAME#``.
+    """
+    if not text or "#" not in text:
+        return text
 
     def repl(match: re.Match[str]) -> str:
         key = match.group(1).strip()
         if key.startswith("*") and key.endswith("*") and len(key) > 2:
             return "\0" + key[1:-1] + "\0"
-        return merged.get(key.upper(), match.group(0))
+        return table.get(key.upper(), match.group(0))
 
     out = text
     for _ in range(16):
@@ -105,9 +122,10 @@ def find_resources(root: Path, skins_root: Path | None = None) -> Path:
 
 
 class _Reader:
-    def __init__(self, root: Path, resources: Path | None) -> None:
+    def __init__(self, root: Path, resources: Path | None, builtins: dict[str, str] | None = None) -> None:
         self.root = root
         self.resources = resources
+        self.builtins = builtins  # e.g. #ROOTCONFIGPATH# / #SETTINGSPATH# in @Include paths
         self.sections: OrderedDict[str, OrderedDict[str, str]] = OrderedDict()
         # Case-insensitive section lookup: lower name -> canonical name.
         self.names: dict[str, str] = {}
@@ -154,7 +172,8 @@ class _Reader:
             if _is_include_key(key):
                 from raintux.core.paths import resolve_ci, windows_to_posix
 
-                inc_rel = windows_to_posix(substitute_variables(value, self.variables(), path.parent, self.resources))
+                inc_rel = windows_to_posix(substitute_variables(value, self.variables(), path.parent, self.resources,
+                                                                self.builtins))
                 inc = Path(inc_rel)
                 inc = resolve_ci(inc if inc.is_absolute() else (path.parent / inc))
                 if inc.is_file():
@@ -165,12 +184,15 @@ class _Reader:
             self.section(current)[key] = value
 
 
-def parse_skin_ini(ini_path: Path, resources: Path | None = None) -> ParsedSkin:
-    """Parse a skin INI with ``[Rainmeter]``, ``[Variables]``, measures, and meters."""
+def parse_skin_ini(ini_path: Path, resources: Path | None = None, builtins: dict[str, str] | None = None) -> ParsedSkin:
+    """Parse a skin INI with ``[Rainmeter]``, ``[Variables]``, measures, and meters.
+
+    ``builtins`` are the skin's built-in variables, used in ``@Include`` paths.
+    """
     ini_path = ini_path.resolve()
     root = ini_path.parent
     resources = resources or find_resources(root)
-    reader = _Reader(root, resources)
+    reader = _Reader(root, resources, builtins)
     reader.read(ini_path, ())
 
     sections = reader.sections

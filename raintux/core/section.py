@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from raintux.core.formula import parse_number
@@ -11,6 +12,9 @@ if TYPE_CHECKING:
     from raintux.core.skin import Skin
 
 log = logging.getLogger(__name__)
+
+# #CURRENTSECTION# and the keyed [#CURRENTSECTION] are the section's own name.
+_CURRENT_SECTION = re.compile(r"#CURRENTSECTION#|\[#CURRENTSECTION\]", re.IGNORECASE)
 
 
 def parse_color(value: str, default: tuple[float, float, float, float] = (0, 0, 0, 0)) -> tuple[float, float, float, float]:
@@ -94,6 +98,8 @@ class Section:
             raw = self.option_raw(key)
             if raw is None:
                 continue
+            if "currentsection" in raw.lower():
+                raw = _CURRENT_SECTION.sub(lambda _m: self.name, raw)
             # Bang options get their [section variables] when they run, not now.
             is_action = "action" in key or key == "buttoncommand"
             self.opts[key] = self.skin.resolve(raw, section_vars=not is_action and (self.dynamic or key in always))

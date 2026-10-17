@@ -8,6 +8,7 @@ whole Rainmeter behaviour can be unit-tested with :class:`NullHost`.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import urllib.parse
@@ -21,7 +22,7 @@ from raintux.core.bangs import split_args, split_commands
 from raintux.core.formula import FormulaError, evaluate, parse_number
 from raintux.core.section import Section
 from raintux.core.ini_writer import write_key_value
-from raintux.core.skin_parser import ParsedSkin, find_resources, parse_skin_ini, substitute_variables
+from raintux.core.skin_parser import ParsedSkin, expand_variables, find_resources, parse_skin_ini, variable_table
 from raintux.measures import create_measure
 from raintux.measures.base_measure import Measure, format_number, trim_number
 
@@ -33,6 +34,7 @@ log = logging.getLogger(__name__)
 _SECTION_VAR = re.compile(r"\[([^\[\]]+)\]")
 _CHAR_REF = re.compile(r"\[\\(x[0-9a-fA-F]{1,6}|\d{1,7})\]")
 _MAX_ACTION_DEPTH = 32
+_MAX_WINDOW = 16384  # px; larger windows can't be allocated by GTK/cairo anyway
 
 # Bangs that act on the window / the app rather than on this skin's sections.
 HOST_BANGS = {
@@ -261,6 +263,9 @@ class Skin:
         self._mouse_over_skin = False
         self._pressed_button: Meter | None = None
         self._builtins_cache: dict[str, str] | None = None
+        self._inline_errors: set[str] = set()
+        self._vars_version = 0  # bumped on every variable change; keys the #Variable# table cache
+        self._var_cache: tuple[tuple[int, int, int, int, int], dict[str, str]] | None = None
         self.on_size_changed: Callable[[int, int], None] | None = None
         self._mouse_ctx: tuple[float, float, Any] | None = None
         self.zoom = 1.0
@@ -272,8 +277,9 @@ class Skin:
         """Parse the INI and create sections (no update yet)."""
         from raintux.meters import create_meter
 
-        self.parsed = parse_skin_ini(self.ini_path, self.resources)
+        self.parsed = parse_skin_ini(self.ini_path, self.resources, self.builtins())
         self.variables = OrderedDict((k.lower(), v) for k, v in self.parsed.variables.items())
+        self._vars_version += 1
         self.styles = {name.lower(): dict(opts) for name, opts in self.parsed.sections.items()}
         self.rm = RainmeterSection(self, "Rainmeter", self.parsed.rainmeter)
         self.rm.read()
@@ -353,6 +359,9 @@ class Skin:
                 "CONFIGEDITOR": os.environ.get("VISUAL") or os.environ.get("EDITOR") or "xdg-open",
                 "CRLF": "\n",
             }
+            # Defaults so skins never see a raw #SCREENAREAX# when the host knows no monitors.
+            for prefix in ("SCREENAREA", "WORKAREA", "PSCREENAREA", "PWORKAREA", "VSCREENAREA"):
+                b.update({prefix + "X": "0", prefix + "Y": "0", prefix + "WIDTH": "1920", prefix + "HEIGHT": "1080"})
             b.update(self.host.screen_variables(self))
             self._builtins_cache = b
         b = dict(self._builtins_cache)
@@ -368,6 +377,14 @@ class Skin:
 
     def invalidate_builtins(self) -> None:
         self._builtins_cache = None
+        self._var_cache = None
+
+    def _variable_table(self) -> dict[str, str]:
+        """Merged [Variables] + built-ins, rebuilt only when something they depend on changed."""
+        key = (self._vars_version, self.state.x, self.state.y, self.width, self.height)
+        if self._var_cache is None or self._var_cache[0] != key:
+            self._var_cache = (key, variable_table(self.variables, self.root, self.resources, self.builtins()))
+        return self._var_cache[1]
 
     def get_variable(self, name: str) -> str | None:
         n = name.strip().lower()
@@ -378,12 +395,13 @@ class Skin:
 
     def set_variable(self, name: str, value: str) -> None:
         self.variables[name.strip().lower()] = value
+        self._vars_version += 1
 
     def resolve(self, text: str, section_vars: bool = False) -> str:
         """Expand ``#Variables#``, character references and (optionally) ``[Section]`` variables."""
         if not text:
             return text
-        out = substitute_variables(text, self.variables, self.root, self.resources, self.builtins())
+        out = expand_variables(text, self._variable_table())
         if "[" in out:
             out = _CHAR_REF.sub(_char_ref, out)
             if section_vars:
@@ -539,8 +557,10 @@ class Skin:
             return None
         try:
             return str(m.inline_call(call))  # type: ignore[attr-defined]
-        except Exception:
-            log.exception("inline Lua [&%s]", spec)
+        except Exception as e:
+            if spec not in self._inline_errors:  # once per call site, not on every update
+                self._inline_errors.add(spec)
+                log.error("[&%s] in %s: %s", spec, self.config, str(e).strip().splitlines()[0] if str(e).strip() else e)
             return ""
 
     # ------------------------------------------------------------------ update cycle
@@ -595,8 +615,11 @@ class Skin:
                     continue
                 x, y, _bw, _bh = mt.box()
                 vw, vh = mt.visible_size()
-                mw = max(mw, int(x + vw + 0.999))
-                mh = max(mh, int(y + vh + 0.999))
+                right, bottom = x + vw, y + vh
+                if not (math.isfinite(right) and math.isfinite(bottom)) or max(right, bottom) > _MAX_WINDOW:
+                    continue  # runaway formula, e.g. dividing by a value a failed download left at 0
+                mw = max(mw, int(right + 0.999))
+                mh = max(mh, int(bottom + 0.999))
             mw += mr
             mh += mb
             bg = self.background_size()
@@ -607,7 +630,7 @@ class Skin:
                     mw, mh = max(mw, bg[0]), max(mh, bg[1])
             w = w or mw
             h = h or mh
-        w, h = max(1, w), max(1, h)
+        w, h = min(max(1, w), _MAX_WINDOW), min(max(1, h), _MAX_WINDOW)
         if (w, h) != (self.width, self.height):
             self.width, self.height = w, h
             self.host.resize(self, w, h)

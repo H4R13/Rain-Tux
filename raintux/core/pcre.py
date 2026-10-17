@@ -14,6 +14,60 @@ _FLAG_GROUP = re.compile(r"^\(\?([a-zA-Z]+)\)")
 _FLAGS = {"i": re.IGNORECASE, "s": re.DOTALL, "m": re.MULTILINE, "x": re.VERBOSE}
 
 
+_POSIX = {"alpha": "a-zA-Z", "digit": "0-9", "alnum": "a-zA-Z0-9", "upper": "A-Z", "lower": "a-z",
+          "space": r"\s", "xdigit": "0-9A-Fa-f", "word": r"\w", "blank": r" \t", "punct": r"!-/:-@\[-`{-~"}
+
+
+def _fix_classes(p: str) -> str:
+    """Inside ``[...]``: expand POSIX classes and escape what Python reads as nested sets.
+
+    PCRE treats ``[`` and doubled ``-&~|`` in a class as literals; Python warns about them
+    (and may change their meaning later).
+    """
+    out: list[str] = []
+    i, n = 0, len(p)
+    in_class = False
+    while i < n:
+        c = p[i]
+        if c == "\\" and i + 1 < n:
+            if p[i + 1] == "h":  # horizontal whitespace
+                out.append(" \t" if in_class else "[ \t]")
+            else:
+                out.append(p[i : i + 2])
+            i += 2
+            continue
+        if not in_class:
+            out.append(c)
+            i += 1
+            if c == "[":
+                in_class = True
+                if i < n and p[i] == "^":
+                    out.append("^")
+                    i += 1
+                if i < n and p[i] == "]":
+                    out.append("\\]")
+                    i += 1
+            continue
+        if c == "]":
+            in_class = False
+            out.append(c)
+        elif c == "[":
+            m = re.match(r"\[:(\^?)([a-z]+):\]", p[i:])
+            if m and m.group(2) in _POSIX and not m.group(1):
+                out.append(_POSIX[m.group(2)])
+                i += m.end()
+                continue
+            out.append("\\[")
+        elif c in "-&~|" and i + 1 < n and p[i + 1] == c:
+            out.append("\\" + c + "\\" + c)
+            i += 2
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _swap_greediness(p: str) -> str:
     out: list[str] = []
     i, n = 0, len(p)
@@ -81,7 +135,7 @@ def compile_pcre(pattern: str) -> re.Pattern[str]:
                 elif ch.lower() in _FLAGS:
                     flags |= _FLAGS[ch.lower()]
     p = re.sub(r"\(\?<(?=[A-Za-z_])", "(?P<", p)
-    p = p.replace("\\h", "[ \\t]")
+    p = _fix_classes(p)
     if ungreedy:
         p = _swap_greediness(p)
     return re.compile(p, flags)

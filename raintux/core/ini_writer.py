@@ -68,5 +68,10 @@ def write_key_value(path: Path, section: str, key: str, value: str) -> bool:
             while insert > start + 1 and not lines[insert - 1].strip():
                 insert -= 1
             lines.insert(insert, f"{key}={value}")
-    path.write_bytes((newline.join(lines) + newline).encode(enc))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((newline.join(lines) + newline).encode(enc))
+    except OSError as e:
+        log.warning("!WriteKeyValue could not write %s: %s", path, e)
+        return False
     return True

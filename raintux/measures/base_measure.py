@@ -157,10 +157,10 @@ class Measure(Section):
         log.info("[%s] does not support !CommandMeasure %r", self.name, args)
 
     def update_now(self) -> bool:
-        """``!UpdateMeasure``: update regardless of UpdateDivider."""
-        return self.update(force=True)
+        """``!UpdateMeasure``: update regardless of UpdateDivider (OnChangeAction waits for the next tick)."""
+        return self.update(force=True, change=False)
 
-    def update(self, force: bool = False) -> bool:
+    def update(self, force: bool = False, change: bool = True) -> bool:
         """One skin tick. Returns True when the measure actually updated."""
         if self.needs_read or self.dynamic:
             self.read()
@@ -185,17 +185,23 @@ class Measure(Section):
         if self.invert:
             v = self.max_value - (v - self.min_value)
         self.value = v
-        self.after_update()
+        self.after_update(change)
         return True
 
-    def after_update(self) -> None:
-        """Run OnUpdateAction, OnChangeAction and the If… actions."""
-        self.skin.execute(self.get("onupdateaction"), self)
-        cur = (self.value, self.string_value())
-        if self._prev is not None and cur != self._prev:
-            self.skin.execute(self.get("onchangeaction"), self)
-        self._prev = cur
+    def after_update(self, change: bool = True) -> None:
+        """The If… actions, OnUpdateAction, then OnChangeAction, in Rainmeter's order.
+
+        The new value is recorded before OnChangeAction runs, so an action that updates
+        the skin again (``!Update``) doesn't see the same change twice.
+        """
         self._if_actions()
+        self.skin.execute(self.get("onupdateaction"), self)
+        if not change:
+            return
+        cur = (self.value, self.string_value())
+        prev, self._prev = self._prev, cur
+        if prev is not None and cur != prev:
+            self.skin.execute(self.get("onchangeaction"), self)
 
     # -- values ----------------------------------------------------------------
     def relative(self) -> float:

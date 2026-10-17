@@ -1,0 +1,122 @@
+"""Regressions found by loading real .rmskin packages (Sonder, ModernGadgets, Fountain of Colors…)."""
+
+from pathlib import Path
+
+import pytest
+
+from helpers import make_skin
+from raintux.core.pcre import compile_pcre
+
+
+def test_current_section_variable(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeasureFive]
+        Measure=Calc
+        Formula=5
+        IfCondition=[#CURRENTSECTION] = 5
+        IfTrueAction=[!SetVariable Who "#CURRENTSECTION#"]
+        DynamicVariables=1
+
+        [Variables]
+        Who=nobody
+    """)
+    skin.update()
+    assert skin.get_variable("Who") == "MeasureFive"
+
+
+def test_formatted_time_value_is_the_text_number(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeasureDay]
+        Measure=Time
+        Format=%#j
+
+        [MeasureNow]
+        Measure=Time
+    """)
+    day, now = skin.measure("MeasureDay"), skin.measure("MeasureNow")
+    assert day.value == float(day.string_value())
+    assert now.value.is_integer()  # whole seconds, so OnChangeAction doesn't fire every update
+
+
+def test_on_change_action_with_update_does_not_loop(tmp_path: Path) -> None:
+    skin, host = make_skin(tmp_path, """
+        [Variables]
+        N=0
+
+        [MeasureCount]
+        Measure=Calc
+        Formula=#N#
+        DynamicVariables=1
+        OnChangeAction=[!Update]["changed"]
+    """)
+    skin.execute("[!SetVariable N 1]")
+    skin.update()  # the nested !Update must not see the same change again
+    assert host.commands.count("changed") == 1
+
+
+def test_include_path_with_builtin_variables(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [Rainmeter]
+        @Include=#ROOTCONFIGPATH#Parts\\Body.inc
+
+        [MeterBody]
+        Meter=String
+        MeterStyle=StyleBody
+    """, files={"Test/Parts/Body.inc": "[StyleBody]\nText=included\n"})
+    assert skin.meter("MeterBody").text == "included"
+
+
+def test_meter_position_of_a_later_string_meter(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeterFirst]
+        Meter=String
+        X=([MeterSecond:X] + 5)
+        DynamicVariables=1
+
+        [MeterSecond]
+        Meter=String
+        X=20
+        StringAlign=Right
+        Text=x
+    """)
+    skin.update()
+    second = skin.meter("MeterSecond")
+    assert skin.meter("MeterFirst").x == pytest.approx(second.x - second.w + 5, abs=0.01)  # X of a right-aligned box
+
+
+def test_runaway_meter_does_not_grow_the_window(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeterBox]
+        Meter=Image
+        W=50
+        H=20
+        SolidColor=255,0,0
+
+        [MeterAway]
+        Meter=Image
+        X=(1/0.00001*1000000)
+        W=10
+        H=10
+        SolidColor=255,0,0
+    """)
+    assert (skin.width, skin.height) == (50, 20)
+
+
+def test_utf16_lua_script(tmp_path: Path) -> None:
+    pytest.importorskip("lupa")
+    lua = "function Update()\n  return loadstring('return 6*7')()\nend\n"  # loadstring: Lua 5.1
+    (tmp_path / "Skins" / "Test").mkdir(parents=True)
+    (tmp_path / "Skins" / "Test" / "s.lua").write_bytes(b"\xff\xfe" + lua.encode("utf-16-le"))
+    skin, _ = make_skin(tmp_path, """
+        [MeasureScript]
+        Measure=Script
+        ScriptFile=s.lua
+    """)
+    skin.update()
+    assert skin.measure("MeasureScript").value == 42
+
+
+def test_pcre_character_classes() -> None:
+    assert compile_pcre(r"[[:alpha:]]+").search("ab1").group(0) == "ab"
+    assert compile_pcre(r"[[(]x").search("[x").group(0) == "[x"
+    assert compile_pcre(r"[\h,]+").search("a ,\tb").group(0) == " ,\t"

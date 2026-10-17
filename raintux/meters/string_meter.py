@@ -6,6 +6,7 @@ import logging
 import re
 from typing import Any
 
+from raintux.core.formula import parse_number
 from raintux.core.section import parse_color
 from raintux.measures.base_measure import pcre_to_python
 from raintux.meters import text as T
@@ -23,6 +24,10 @@ def parse_auto_scale(value: str) -> int:
 
 
 class StringMeter(Meter):
+    # Defaults for [Meter:X] lookups from sections read before this meter.
+    h_align = "left"
+    v_align = "top"
+
     def always_dynamic(self) -> set[str]:
         return {"text", "prefix", "postfix", "tooltiptext"}
 
@@ -89,6 +94,10 @@ class StringMeter(Meter):
         """``InlineSetting=Type | param | param…`` applied to ``InlinePattern`` matches (or their groups)."""
         attrs: list[tuple[int, int, str, Any]] = []
         shadows: list[tuple[int, int, float, float, Any]] = []
+
+        def num(value: str, default: float) -> float:  # parameters may be formulas: Size | (12*#Scale#)
+            return parse_number(value, default, self.skin.measure_number) if value.strip() else default
+
         for setting, pattern in self.inline_specs:
             parts = [p.strip() for p in setting.split("|")]
             kind, params = parts[0].lower(), parts[1:]
@@ -116,20 +125,20 @@ class StringMeter(Meter):
                     elif kind == "face":
                         attrs.append((start, end, "face", p0))
                     elif kind == "size":
-                        attrs.append((start, end, "size", float(p0 or self.size)))
+                        attrs.append((start, end, "size", num(p0, self.size)))
                     elif kind == "weight":
-                        attrs.append((start, end, "weight", int(float(p0 or 400))))
+                        attrs.append((start, end, "weight", int(num(p0, 400))))
                     elif kind in ("italic", "oblique", "underline", "strikethrough"):
                         attrs.append((start, end, kind, True))
                     elif kind == "characterspacing":
                         trail = params[1] if len(params) > 1 else p0
-                        attrs.append((start, end, "spacing", float(trail or 0)))
+                        attrs.append((start, end, "spacing", num(trail, 0)))
                     elif kind == "stretch":
-                        attrs.append((start, end, "stretch", max(0, min(8, int(float(p0 or 5)) - 1))))
+                        attrs.append((start, end, "stretch", max(0, min(8, int(num(p0, 5)) - 1))))
                     elif kind == "shadow":
                         off = [v.strip() for v in p0.split(",")]
-                        sx = float(off[0]) if off and off[0] else 1.0
-                        sy = float(off[1]) if len(off) > 1 and off[1] else 1.0
+                        sx = num(off[0], 1.0)
+                        sy = num(off[1], 1.0) if len(off) > 1 else 1.0
                         col = parse_color(params[2], (0, 0, 0, 1)) if len(params) > 2 else (0, 0, 0, 1)
                         shadows.append((start, end, sx, sy, col))
                     elif kind == "typography":

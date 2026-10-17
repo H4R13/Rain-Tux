@@ -18,6 +18,16 @@ from typing import Any
 from raintux.core.formula import FormulaError, evaluate, parse_number
 from raintux.measures.base_measure import Measure, trim_number
 
+
+def _lua_str(v: Any) -> str:
+    """Lua's tostring for values passed to Python: Lua 5.1 numbers are doubles, ``5`` not ``5.0``."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, float):
+        return str(int(v)) if v.is_integer() else format(v, ".14g")
+    return str(v)
+
+
 log = logging.getLogger(__name__)
 
 # Lua side of the API: thin tables whose methods call back into Python (``py``).
@@ -122,9 +132,9 @@ class _Api:
     def opt(self, h: Any, key: Any, default: Any) -> str:
         sec = self._sec(h)
         if sec is None:
-            return str(default)
+            return _lua_str(default)
         raw = sec.option_raw(str(key))
-        return self.skin.resolve(raw, section_vars=True) if raw is not None else str(default)
+        return self.skin.resolve(raw, section_vars=True) if raw is not None else _lua_str(default)
 
     def nopt(self, h: Any, key: Any, default: Any) -> float:
         return parse_number(self.opt(h, key, ""), float(default or 0), self.skin.measure_number)
@@ -156,7 +166,7 @@ class _Api:
             mt.hidden = on
 
     def bang(self, *args: Any) -> None:
-        parts = [str(a) for a in args]
+        parts = [_lua_str(a) for a in args]
         if not parts:
             return
         # source=None: #Variables# in bangs from Lua resolve with their current values.
@@ -170,11 +180,11 @@ class _Api:
         return self.skin.get_variable(str(name))
 
     def replace(self, s: Any) -> str:
-        return self.skin.resolve(str(s), section_vars=True)
+        return self.skin.resolve(_lua_str(s), section_vars=True)
 
     def formula(self, s: Any) -> float | None:
         try:
-            return evaluate(self.skin.resolve(str(s), section_vars=True), self.skin.measure_number)
+            return evaluate(self.skin.resolve(_lua_str(s), section_vars=True), self.skin.measure_number)
         except FormulaError:
             return None
 
@@ -186,7 +196,7 @@ class _Api:
         return float({"x": st.x, "y": st.y, "w": self.skin.width, "h": self.skin.height}[which])
 
     def log(self, *args: Any) -> None:
-        log.info("[%s] %s", self.m.name, " ".join(str(a) for a in args))
+        log.info("[%s] %s", self.m.name, " ".join(_lua_str(a) for a in args))
 
 
 class ScriptMeasure(Measure):
@@ -202,14 +212,20 @@ class ScriptMeasure(Measure):
             self._failed = True
             return
         try:
-            from lupa import LuaRuntime
+            try:
+                from lupa.lua51 import LuaRuntime  # Rainmeter embeds Lua 5.1 (loadstring, unpack, setfenv…)
+            except ImportError:
+                from lupa import LuaRuntime
         except ImportError:
             log.warning("[%s] Lua scripts need the 'lupa' package (pip install lupa)", self.name)
             self._failed = True
             return
         path = self.skin.path(self.script_file)
         try:
-            source = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+            from raintux.core.ini_writer import detect_encoding
+
+            raw = Path(path).read_bytes()
+            source = raw.decode(detect_encoding(raw), errors="replace")  # Rainmeter accepts UTF-16 scripts
         except OSError as e:
             log.warning("[%s] cannot read %s: %s", self.name, path, e)
             self._failed = True
@@ -269,6 +285,4 @@ class ScriptMeasure(Measure):
         if self._lua is None:
             return ""
         result = self._lua.eval(call)
-        if isinstance(result, float) and result.is_integer():
-            return int(result)
-        return "" if result is None else result
+        return "" if result is None else _lua_str(result)
