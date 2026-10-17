@@ -7,7 +7,8 @@ of Colors and DetailedSystemMonitor now install, load and render; each fix below
 Rainmeter's source.
 
 - Lua runs on Lua 5.1 like Rainmeter (`loadstring`, `unpack`, number formatting); UTF-16 scripts
-  load; text-mode file reads drop the `` of CRLF lines as on Windows; inline `[&Script:…]`
+  load; text-mode file reads drop the `
+` of CRLF lines as on Windows; inline `[&Script:…]`
   calls restart the 5 s watchdog.
 - Option reads: `[Section]` variables resolve on every read; `[Meter:X/Y]` follows the relative
   chain before the first layout; formulas are anything starting with `(`; `%APPDATA%`-style
@@ -27,8 +28,12 @@ Rainmeter's source.
   after the first render; PCRE classes like `[:alpha:]` work.
 - Speed: the `#Variable#` table is cached per skin (an 800-meter Sonder skin loads in about 1 s
   instead of minutes); meters with runaway coordinates no longer stretch the window.
+- Desktop (tested live in Sway with a virtual pointer and keyboard): clicks, hover and drags work
+  on PyGObject < 3.50 (Ubuntu 24.04), dragging on Sway keeps the skin under the pointer, Image
+  meters take clicks over their whole rectangle as in Rainmeter, a Roundline without a measure
+  is drawn full.
 - `install.sh` installs Selawik (Segoe UI's metrics, OFL) so Windows skins wrap text as on
-  Windows; re-running it follows `RAINTUX_REPO`.
+  Windows; re-running it follows `RAINTUX_REPO` and survives a rewritten branch.
 
 ## 0.9.0 — Rainmeter parity
 
