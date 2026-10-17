@@ -67,6 +67,75 @@ local function wrap_meter(h)
   function o:Hide() py.hidden(h, true) end
   return o
 end
+-- Windows Lua reads files in text mode, which drops the \r of CRLF line ends; skins rely on it.
+do
+  local real_open, real_lines = io.open, io.lines
+  local function text_file(content)
+    content = content:gsub('\r\n', '\n')
+    local pos, f = 1, {}
+    local function read_one(fmt)
+      if type(fmt) == 'number' then
+        if pos > #content then return nil end
+        local s = content:sub(pos, pos + fmt - 1)
+        pos = pos + fmt
+        return s
+      end
+      local c = tostring(fmt or 'l'):gsub('^%*', ''):sub(1, 1)
+      if c == 'a' then
+        local s = content:sub(pos)
+        pos = #content + 1
+        return s
+      end
+      if c == 'n' then
+        local s, e = content:find('^%s*[-+]?%d*%.?%d+', pos)
+        if not s then return nil end
+        pos = e + 1
+        return tonumber(content:sub(s, e))
+      end
+      if pos > #content then return nil end
+      local e = content:find('\n', pos, true)
+      local line
+      if e then
+        line = content:sub(pos, c == 'L' and e or e - 1)
+        pos = e + 1
+      else
+        line = content:sub(pos)
+        pos = #content + 1
+      end
+      return line
+    end
+    function f:read(...)
+      local n = select('#', ...)
+      if n == 0 then return read_one('l') end
+      local out = {}
+      for i = 1, n do out[i] = read_one((select(i, ...))) end
+      return unpack(out, 1, n)
+    end
+    function f:lines() return function() return read_one('l') end end
+    function f:seek(whence, offset)
+      local base = ({set = 0, cur = pos - 1, ['end'] = #content})[whence or 'cur'] or (pos - 1)
+      pos = base + (offset or 0) + 1
+      return pos - 1
+    end
+    function f:close() return true end
+    return f
+  end
+  io.open = function(path, mode)
+    mode = mode or 'r'
+    if mode:find('[wa+b]') then return real_open(path, mode) end
+    local h, err = real_open(path, 'rb')
+    if not h then return nil, err end
+    local data = h:read('*a')
+    h:close()
+    return text_file(data or '')
+  end
+  io.lines = function(path)
+    if path == nil then return real_lines() end
+    local f, err = io.open(path, 'r')
+    if not f then error(err, 2) end
+    return f:lines()
+  end
+end
 SKIN = {}
 function SKIN:Bang(...) py.bang(...) end
 function SKIN:GetMeasure(n) return wrap_measure(py.measure(n)) end

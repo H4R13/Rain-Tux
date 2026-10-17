@@ -36,6 +36,10 @@ def map_drive(drive: str) -> str:
     return d or "/"
 
 
+# MeasureDiskSpace.cpp's DRIVETYPE_* values.
+_DRIVE_TYPES = {"Error": 0, "Removed": 1, "Removable": 3, "Fixed": 4, "Network": 5, "CDRom": 6, "Ram": 7}
+
+
 class DiskMeasure(Measure):
     """Number is free bytes (used with ``InvertMeasure=1`` in many skins)."""
 
@@ -48,8 +52,11 @@ class DiskMeasure(Measure):
 
     def update_value(self) -> None:
         if self.type_mode or self.label_mode:
-            self._raw_number = 0.0
             self.string = self._type_or_label()
+            # Type=1 also gives Rainmeter's number (skins test e.g. "= 4" for a fixed drive).
+            self._raw_number = float(_DRIVE_TYPES.get(self.string, 0)) if self.type_mode else 0.0
+            if self.type_mode and not self.has("maxvalue"):
+                self.max_value = 7.0
             return
         if not self.path or not Path(self.path).exists():
             self._raw_number = 0.0
@@ -70,7 +77,7 @@ class DiskMeasure(Measure):
         if self.label_mode:
             return Path(self.path).name or "/"
         if part is None:
-            return "Unknown"
+            return "Error"
         if part.fstype in ("nfs", "nfs4", "cifs", "smb3", "sshfs", "fuse.sshfs"):
             return "Network"
         if self.path.startswith(("/media", "/run/media")):

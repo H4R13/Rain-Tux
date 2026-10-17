@@ -17,6 +17,13 @@ log = logging.getLogger(__name__)
 class StringMeasure(Measure):
     """``Measure=String`` — the ``String=`` option (number is its numeric value)."""
 
+    def read_measure(self) -> None:
+        # Like Rainmeter, publish the value at once so meters read before the first update
+        # can use it (MeasureName=Measure[MeasureDrive]Total).
+        if not self.initialized and not self.disabled and not self.paused:
+            self.update_value()
+            self.value = self._raw_number
+
     def update_value(self) -> None:
         s = self.get("string")
         self.string = s

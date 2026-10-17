@@ -159,9 +159,10 @@ class ShapeMeter(Meter):
             elif w in ("rotate", "scale", "skew", "offset"):
                 sd.transforms[w] = _nums(arg, self)
             elif w == "transformorder":
-                order = [o.strip().lower() for o in arg.split(",") if o.strip()]
+                order = list(dict.fromkeys(o.strip().lower() for o in arg.split(",") if o.strip()))
                 if order:
-                    sd.order = order
+                    # Steps not named keep the default order after the named ones (Shape.cpp).
+                    sd.order = order + [o for o in ("rotate", "scale", "skew", "offset") if o not in order]
             elif w == "extend" and depth < 8:
                 for name in arg.split(","):
                     extra = self.get(name.strip())
@@ -242,9 +243,10 @@ class ShapeMeter(Meter):
                 x, y = v[0], v[1]
             elif w == "arcto" and len(v) >= 2:
                 ex, ey = v[0], v[1]
-                rx = v[2] if len(v) > 2 else math.hypot(ex - x, ey - y) / 2
-                ry = v[3] if len(v) > 3 else rx
-                angle = v[4] if len(v) > 4 else 0.0
+                given = [not t.strip().startswith("*") for t in split_top_level(arg, ",")] + [False] * 8
+                rx = v[2] if len(v) > 2 and given[2] else math.hypot(ex - x, ey - y) / 2
+                ry = v[3] if len(v) > 3 and given[3] else rx
+                angle = v[4] if len(v) > 4 and given[4] else 0.0
                 clockwise = not (len(v) > 5 and int(v[5]) != 0)  # 0 = clockwise (default)
                 small = not (len(v) > 6 and int(v[6]) != 0)  # 0 = small arc (default)
                 _svg_arc(cr, x, y, rx, ry, angle, 0 if small else 1, clockwise, ex, ey)

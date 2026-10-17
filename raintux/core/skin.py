@@ -22,6 +22,7 @@ from raintux.core.bangs import split_args, split_commands
 from raintux.core.formula import FormulaError, evaluate, parse_number
 from raintux.core.section import Section
 from raintux.core.ini_writer import write_key_value
+from raintux.core.paths import environment_variable, expand_environment
 from raintux.core.skin_parser import ParsedSkin, expand_variables, find_resources, parse_skin_ini, variable_table
 from raintux.measures import create_measure
 from raintux.measures.base_measure import Measure, format_number, trim_number
@@ -402,7 +403,7 @@ class Skin:
         """Expand ``#Variables#``, character references and (optionally) ``[Section]`` variables."""
         if not text:
             return text
-        out = expand_variables(text, self._variable_table())
+        out = expand_variables(expand_environment(text), self._variable_table())
         if "[" in out:
             out = _CHAR_REF.sub(_char_ref, out)
             if section_vars:
@@ -443,7 +444,7 @@ class Skin:
                 return self._inline_script(rest)
             return self.section_variable(rest, current)
         if spec.startswith("%"):
-            return os.environ.get(spec[1:])
+            return environment_variable(spec[1:])
         if spec.startswith("$"):
             return self.dollar_variable(spec[1:], current)
         if spec.startswith(("!", "\\")):

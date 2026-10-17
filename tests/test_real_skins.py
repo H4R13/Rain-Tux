@@ -169,3 +169,83 @@ def test_empty_set_option_falls_back_to_the_style(tmp_path: Path) -> None:
     """)
     skin.execute('[!SetOption MeterDay FontColor ""][!UpdateMeter MeterDay]')  # ModernGadgets' calendar
     assert skin.meter("MeterDay").color_ == (1.0, 0.0, 0.0, 1.0)
+
+
+def test_windows_environment_variables(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeasureDrive]
+        Measure=String
+        String=%SystemDrive%
+        Substitute=":":""
+
+        [MeasureFormat]
+        Measure=String
+        String=%H:%M %1 50%
+    """)  # DetailedSystemMonitor: Measure[MeasureDrive]Total -> MeasureCTotal
+    skin.update()
+    assert skin.measure("MeasureDrive").string_value() == "C"
+    assert skin.measure("MeasureFormat").string_value() == "%H:%M %1 50%"
+
+
+@pytest.mark.gtk
+def test_partial_transform_order_keeps_the_other_steps(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeterIcon]
+        Meter=Shape
+        Shape=Rectangle 0,0,512,512 | Scale 0.05,0.05,0,0 | Offset 0,10 | TransformOrder Offset
+    """)  # DetailedSystemMonitor's icons
+    skin.update()
+    mt = skin.meter("MeterIcon")
+    assert mt.w < 30 and mt.h < 30  # scaled to ~26 px; skipping Scale left it 512 px
+
+
+def test_lua_reads_crlf_files_like_windows(tmp_path: Path) -> None:
+    pytest.importorskip("lupa")
+    (tmp_path / "Skins" / "Test").mkdir(parents=True)
+    (tmp_path / "Skins" / "Test" / "vars.inc").write_bytes(b"[Variables]\r\nConfig=Fountain of Colors\r\n")
+    (tmp_path / "Skins" / "Test" / "s.lua").write_text(
+        "function Initialize()\n"
+        "  for line in io.lines(SKIN:MakePathAbsolute('vars.inc')) do last = line end\n"
+        "  local f = io.open(SKIN:MakePathAbsolute('vars.inc'))\n"
+        "  first = f:read()\n"
+        "  f:close()\n"
+        "end\n"
+        "function Update() return first .. '|' .. last end\n")
+    skin, _ = make_skin(tmp_path, """
+        [MeasureScript]
+        Measure=Script
+        ScriptFile=s.lua
+    """)  # Fountain of Colors' Initialize script; a "\r" ended up in !DeactivateConfig
+    skin.update()
+    assert skin.measure("MeasureScript").string_value() == "[Variables]|Config=Fountain of Colors"
+
+
+def test_string_measure_value_is_ready_for_meters_read_before_it_updates(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeasureDrive]
+        Measure=String
+        String=C:
+        Substitute=":":""
+
+        [MeasureCTotal]
+        Measure=Calc
+        Formula=1234
+
+        [MeterTotal]
+        Meter=String
+        MeasureName=Measure[MeasureDrive]Total
+    """)  # DetailedSystemMonitor's disk total
+    skin.update()
+    assert skin.meter("MeterTotal").text == "1234"
+
+
+def test_drive_type_number(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeasureCType]
+        Measure=FreeDiskSpace
+        Drive=C:
+        Type=1
+    """)  # DetailedSystemMonitor disables a drive's measures unless this is 4 (Fixed)
+    skin.update()
+    m = skin.measure("MeasureCType")
+    assert (m.string_value(), m.value) in (("Fixed", 4.0), ("Ram", 7.0), ("Network", 5.0))
