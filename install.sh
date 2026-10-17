@@ -156,7 +156,11 @@ if [ -d "$APP_DIR/.git" ]; then
   git -C "$APP_DIR" remote set-url origin "$REPO"
   git -C "$APP_DIR" fetch -q origin "$BRANCH"
   git -C "$APP_DIR" checkout -q "$BRANCH" 2>/dev/null || git -C "$APP_DIR" checkout -q -b "$BRANCH" "origin/$BRANCH"
-  git -C "$APP_DIR" pull -q --ff-only origin "$BRANCH"
+  if ! git -C "$APP_DIR" pull -q --ff-only origin "$BRANCH" 2>/dev/null; then
+    # The branch was rewritten upstream; this directory is managed by the installer.
+    warn "The $BRANCH branch was rewritten upstream; resetting $APP_DIR to it"
+    git -C "$APP_DIR" checkout -q -f -B "$BRANCH" "origin/$BRANCH"
+  fi
 else
   say "Downloading RainTux ($BRANCH) to $APP_DIR"
   git clone -q --branch "$BRANCH" "$REPO" "$APP_DIR"
