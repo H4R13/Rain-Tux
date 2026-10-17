@@ -168,20 +168,3 @@ class ImageMeter(Meter):
         cr.set_source(content)
         cr.mask(pat)
         cr.restore()
-
-    def hit_content(self, x: float, y: float) -> bool:
-        if self.solid[3] > 0:
-            return True
-        if self.img is None:
-            return False
-        dx, dy, dw, dh = self._dest()
-        if self.tile or self.rotate or dw <= 0 or dh <= 0:
-            return True
-        if self.flip in ("horizontal", "both"):
-            x = dx + dw - (x - dx)
-        if self.flip in ("vertical", "both"):
-            y = dy + dh - (y - dy)
-        sx0, sy0, sw, sh = self.src or (0.0, 0.0, float(self.img.width), float(self.img.height))
-        ix = sx0 + (x - dx) * sw / dw
-        iy = sy0 + (y - dy) * sh / dh
-        return self.img.alpha_at(ix, iy) > 0

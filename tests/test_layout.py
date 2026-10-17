@@ -171,5 +171,7 @@ def test_image_meter_scaling(tmp_path: Path) -> None:
     assert (skin.meter("MeterWidthOnly").w, skin.meter("MeterWidthOnly").h) == (80, 40)  # aspect kept
     assert skin.meter("MeterCrop").src == (50, 0, 10, 10)  # origin 2 = top right
     nat = skin.meter("MeterNatural")
-    assert not nat.hit_test(0, 0)  # transparent pixel clicks through
-    assert nat.hit_test(5, 5)
+    # Rainmeter hit-tests Image meters by their rectangle; fully transparent window pixels
+    # click through at the window (input region), not per meter.
+    assert nat.hit_test(0, 0) and nat.hit_test(5, 5)
+    assert not nat.hit_test(45, 5)

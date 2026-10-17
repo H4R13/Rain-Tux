@@ -296,3 +296,28 @@ def test_roundline_without_measure_is_full(tmp_path: Path) -> None:
     surf.flush()
     data = surf.get_data()
     assert data[(20 * 40 + 35) * 4 + 3] > 0  # a pixel on the ring, right of the centre
+
+
+def test_transparent_image_mouse_region_takes_clicks(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeterBackground]
+        Meter=Image
+        W=100
+        H=50
+        SolidColor=20,20,20
+
+        [MeterStartButton]
+        Meter=Image
+        X=10
+        Y=10
+        W=20
+        H=20
+        SolidColor=255,255,255,0
+        LeftMouseUpAction=[!SetVariable Started 1]
+
+        [Variables]
+        Started=0
+    """)  # ModernGadgets' stopwatch buttons
+    skin.mouse("down", 20, 20)  # not consumed: a press may still start a window drag
+    assert skin.mouse("up", 20, 20)
+    assert skin.get_variable("Started") == "1"
