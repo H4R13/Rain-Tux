@@ -161,6 +161,8 @@ class SkinWindow(Gtk.ApplicationWindow):
         _LayerShell.set_monitor(self, mon)
         _LayerShell.set_margin(self, _LayerShell.Edge.LEFT, int(x - g.x))
         _LayerShell.set_margin(self, _LayerShell.Edge.TOP, int(y - g.y))
+        # Margins apply on the surface's next commit; draw now so a drag doesn't run ahead of it.
+        self.area.queue_draw()
 
     def resize_canvas(self, width: int, height: int) -> None:
         self._logical = (max(1, width), max(1, height))
