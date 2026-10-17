@@ -197,6 +197,11 @@ class Meter(Section):
         h = self.get("h").strip()
         self.w_opt = parse_number(w, 0.0, self.skin.measure_number) if w else None
         self.h_opt = parse_number(h, 0.0, self.skin.measure_number) if h else None
+        # Rainmeter knows an explicit W/H as soon as the options are read, before any update.
+        if self.w_opt is not None and not self.content_w:
+            self.content_w = max(0.0, self.w_opt)
+        if self.h_opt is not None and not self.content_h:
+            self.content_h = max(0.0, self.h_opt)
         p = parse_numbers(self.get("padding"), 4, 0.0, self.skin.measure_number)
         self.padding = (p[0], p[1], p[2], p[3])
         # Re-read on every read like Rainmeter; !ShowMeter / !HideMeter also set the option.

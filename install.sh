@@ -27,6 +27,8 @@ DESKTOP_FILE="$DATA/applications/raintux.desktop"
 ICON_FILE="$DATA/icons/hicolor/scalable/apps/raintux.svg"
 MIME_FILE="$DATA/mime/packages/raintux.xml"
 AUTOSTART_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/raintux.desktop"
+FONT_DIR="$DATA/fonts/raintux-selawik"
+SELAWIK_URL="https://github.com/microsoft/Selawik/releases/download/1.01/Selawik_Release.zip"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -52,7 +54,7 @@ fi
 if [ "$UNINSTALL" -eq 1 ]; then
   say "Removing RainTux (skins in ~/RainTux and settings in ~/.config/raintux are kept)"
   pkill -f "python.* -m raintux" 2>/dev/null || true
-  rm -rf "$APP_DIR" "$VENV" "$LAUNCHER" "$DESKTOP_FILE" "$ICON_FILE" "$MIME_FILE" "$AUTOSTART_FILE"
+  rm -rf "$APP_DIR" "$VENV" "$LAUNCHER" "$DESKTOP_FILE" "$ICON_FILE" "$MIME_FILE" "$AUTOSTART_FILE" "$FONT_DIR"
   command -v update-mime-database >/dev/null && update-mime-database "$DATA/mime" >/dev/null 2>&1 || true
   command -v update-desktop-database >/dev/null && update-desktop-database "$DATA/applications" >/dev/null 2>&1 || true
   say "Done."
@@ -206,6 +208,28 @@ command -v update-mime-database >/dev/null && update-mime-database "$DATA/mime" 
 command -v update-desktop-database >/dev/null && update-desktop-database "$DATA/applications" >/dev/null 2>&1 || true
 command -v xdg-mime >/dev/null && xdg-mime default raintux.desktop application/x-rainmeter-skin 2>/dev/null || true
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t "$DATA/icons/hicolor" 2>/dev/null || true
+
+# Selawik is Microsoft's open-source (OFL) font with Segoe UI's metrics. Windows skins are laid
+# out for Segoe UI, so with it text wraps and clips as it does on Windows.
+if ! fc-list 2>/dev/null | grep -qi selawik; then
+  say "Installing the Selawik font (Segoe UI metrics)"
+  tmp="$(mktemp -d)"
+  if command -v curl >/dev/null && curl -fsSL -o "$tmp/selawik.zip" "$SELAWIK_URL"; then
+    mkdir -p "$FONT_DIR"
+    "$PY" - "$tmp/selawik.zip" "$FONT_DIR" <<'EOF' || warn "Could not unpack Selawik"
+import os, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    for name in z.namelist():
+        if name.lower().endswith(".ttf"):
+            with open(os.path.join(sys.argv[2], os.path.basename(name)), "wb") as out:
+                out.write(z.read(name))
+EOF
+    command -v fc-cache >/dev/null && fc-cache -f "$FONT_DIR" >/dev/null 2>&1 || true
+  else
+    warn "Could not download Selawik; skins made for Segoe UI will use a wider font"
+  fi
+  rm -rf "$tmp"
+fi
 
 if [ "$AUTOSTART" -eq 1 ]; then
   mkdir -p "$(dirname "$AUTOSTART_FILE")"

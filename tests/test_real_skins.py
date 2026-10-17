@@ -249,3 +249,27 @@ def test_drive_type_number(tmp_path: Path) -> None:
     skin.update()
     m = skin.measure("MeasureCType")
     assert (m.string_value(), m.value) in (("Fixed", 4.0), ("Ram", 7.0), ("Network", 5.0))
+
+
+def test_meter_position_while_loading_follows_the_relative_chain(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeterRow1]
+        Meter=Image
+        Y=25
+        W=10
+        H=20
+
+        [MeterRow2]
+        Meter=Image
+        Y=15R
+        W=10
+        H=20
+
+        [MeterBelow]
+        Meter=Image
+        Y=([MeterRow2:Y]+60)
+        W=10
+        H=10
+    """)  # SysDash's settings: read at load, before any layout
+    skin.update()
+    assert skin.meter("MeterBelow").y == 25 + 20 + 15 + 60

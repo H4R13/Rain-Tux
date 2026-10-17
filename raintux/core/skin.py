@@ -265,6 +265,7 @@ class Skin:
         self._pressed_button: Meter | None = None
         self._builtins_cache: dict[str, str] | None = None
         self._inline_errors: set[str] = set()
+        self._laid_out = False  # until then [Meter:X] walks the relative chain (_layout_chain)
         self._vars_version = 0  # bumped on every variable change; keys the #Variable# table cache
         self._var_cache: tuple[tuple[int, int, int, int, int], dict[str, str]] | None = None
         self.on_size_changed: Callable[[int, int], None] | None = None
@@ -278,6 +279,7 @@ class Skin:
         """Parse the INI and create sections (no update yet)."""
         from raintux.meters import create_meter
 
+        self._laid_out = False
         self.parsed = parse_skin_ini(self.ini_path, self.resources, self.builtins())
         self.variables = OrderedDict((k.lower(), v) for k, v in self.parsed.variables.items())
         self._vars_version += 1
@@ -482,6 +484,8 @@ class Skin:
         mt = self.meter(name)
         if mt is not None and colon:
             key = param.strip().upper()
+            if not self._laid_out:
+                self._layout_chain(mt)
             x, y, _w, _h = mt.box()
             w, h = mt.visible_size()
             vals = {"X": x, "Y": y, "W": w, "H": h, "XW": x + w, "YH": y + h}
@@ -581,6 +585,17 @@ class Skin:
         self.host.redraw(self)
         self.execute(self.rm.get("onupdateaction"), self.rm)
 
+    def _layout_chain(self, mt: Meter) -> None:
+        """Before the first layout, position ``mt`` from its relative chain on demand, like
+        Rainmeter's Meter::GetX/GetY (``Y=([Other:Y]+60)`` read while the skin loads)."""
+        chain: list[Meter] = []
+        cur: Meter | None = mt
+        while cur is not None and len(chain) < 10000:
+            chain.append(cur)
+            cur = cur.relative_to
+        for m in reversed(chain):
+            m.layout()
+
     def layout(self, force_size: bool = False) -> None:
         # Relative meters (Rainmeter's UpdateRelativeMeters): contained meters chain inside their
         # container; everything else chains to the previous non-contained meter (hidden ones too).
@@ -599,6 +614,7 @@ class Skin:
             prev = mt
         for mt in self.meters:
             mt.layout()
+        self._laid_out = True
         if force_size or self.dynamic_window_size or self.counter <= 1 or not self.width:
             self._resize()
 
