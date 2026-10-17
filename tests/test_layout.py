@@ -78,6 +78,7 @@ def test_meter_style_precedence(tmp_path: Path) -> None:
     assert (a.x, a.w, a.h) == (7, 40, 10)  # own option > later style > earlier style
 
 
+@pytest.mark.gtk
 def test_string_alignment_moves_the_box(tmp_path: Path) -> None:
     skin, _ = make_skin(tmp_path, """
         [MeterRight]

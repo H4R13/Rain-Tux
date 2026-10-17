@@ -7,6 +7,8 @@ import sys
 import types
 from unittest import mock
 
+import pytest
+
 
 def _missing(name: str) -> bool:
     try:
@@ -18,6 +20,22 @@ def _missing(name: str) -> bool:
     except (ImportError, ValueError):
         return True
     return False
+
+
+HAVE_GTK = not (_missing("cairo") or _missing("gi.repository.Pango"))
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line("markers", "gtk: measures text with Pango; skipped when GTK isn't installed")
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    if HAVE_GTK:
+        return
+    skip = pytest.mark.skip(reason="needs GTK (Pango, pycairo) to measure text")
+    for item in items:
+        if "gtk" in item.keywords:
+            item.add_marker(skip)
 
 
 if _missing("cairo"):

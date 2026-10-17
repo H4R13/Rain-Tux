@@ -122,6 +122,7 @@ TEXTEDIT_SKIN = """
 """
 
 
+@pytest.mark.gtk
 def test_text_edit_typing_and_submit(tmp_path: Path) -> None:
     skin, host = make_skin(tmp_path, TEXTEDIT_SKIN)
     te = skin.meter("MeterSearch")
@@ -145,6 +146,7 @@ def test_text_edit_typing_and_submit(tmp_path: Path) -> None:
     assert not te.focused and host.commands == ["dismissed"]
 
 
+@pytest.mark.gtk
 def test_text_edit_filters_and_bangs(tmp_path: Path) -> None:
     skin, _ = make_skin(tmp_path, """
         [MeterNum]
@@ -219,8 +221,8 @@ def test_mouse_measure_drag_action(tmp_path: Path) -> None:
     assert skin.get_variable("Knob") == "50"
 
 
+@pytest.mark.gtk
 def test_svg_meter(tmp_path: Path) -> None:
-    pytest.importorskip("gi")
     svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">'
            '<rect id="box" width="40" height="20" fill="red"/></svg>')
     skin, _ = make_skin(tmp_path, """
