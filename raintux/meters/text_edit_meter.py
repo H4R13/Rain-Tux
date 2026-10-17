@@ -45,9 +45,6 @@ class TextEditMeter(StringMeter):
         self._blink_on = True
         self._blink_handle: Any = None
 
-    def always_dynamic(self) -> set[str]:
-        return set()
-
     # ------------------------------------------------------------------ options
     def read_meter(self) -> None:
         super().read_meter()

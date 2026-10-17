@@ -41,6 +41,12 @@ class ShapeDef:
     combine: list[tuple[str, str]] = field(default_factory=list)
 
 
+def _shape_key(name: str) -> str:
+    """Option key of a Combine reference: ``Shape`` and ``Shape1`` are both the first shape."""
+    key = name.strip().lower()
+    return "shape" if key == "shape1" else key
+
+
 def _nums(text: str, meter: Meter) -> list[float]:
     if not text.strip():
         return []
@@ -69,7 +75,9 @@ class ShapeMeter(Meter):
             if sd is not None:
                 self.shapes.append(sd)
             i += 1
-        used = {k.lower() for sd in self.shapes for _op, k in sd.combine}
+        # Shapes used by a Combine (its base and operands) are only drawn through it.
+        used = {k for sd in self.shapes for _op, k in sd.combine}
+        used |= {_shape_key(sd.args[0]) for sd in self.shapes if sd.kind == "combine" and sd.args}
         self.by_key = {sd.key: sd for sd in self.shapes}
         self.drawn = [sd for sd in self.shapes if sd.key not in used]
         self.bounds = (0.0, 0.0, 0.0, 0.0)
@@ -84,12 +92,19 @@ class ShapeMeter(Meter):
             log.warning("[%s] unknown shape %r", self.name, kind)
             return None
         sd = ShapeDef(key=key, kind=kind, args=[a for a in split_top_level(rest, ",")] if kind != "path" and kind != "combine" else [rest.strip()])
+        if kind in ("arc", "curve"):
+            # Open arcs and curves get a transparent fill unless a Fill is given (MeterShape.cpp).
+            vals = _nums(rest, self)
+            closed = (len(vals) > 9 and vals[9] == 0) if kind == "arc" else (
+                (len(vals) == 7 and vals[6] != 0) or (len(vals) >= 9 and vals[8] != 0))
+            if not closed:
+                sd.fill = ("color", (0.0, 0.0, 0.0, 0.0))
         if kind == "combine":
             mods = []
             for p in parts[1:]:
                 word, _s, arg = p.strip().partition(" ")
                 if word.lower() in ("union", "intersect", "xor", "exclude"):
-                    sd.combine.append((word.lower(), arg.strip().lower()))
+                    sd.combine.append((word.lower(), _shape_key(arg)))
                 else:
                     mods.append(p)
             self._modifiers(sd, mods)
@@ -181,14 +196,18 @@ class ShapeMeter(Meter):
             cr.move_to(x1, y1)
             cr.line_to(x2, y2)
         elif k == "arc":
+            # Rainmeter: Arc x1,y1,x2,y2,[RadiusX],[RadiusY],[Angle],[Sweep],[Size],[Open]; the
+            # flags are 0 = clockwise / small / open (the defaults) and "*" keeps a default.
+            given = [not str(v).strip().startswith("*") for v in sd.args] + [False] * 10
             x1, y1, x2, y2 = (a + [0, 0, 0, 0])[:4]
-            angle = a[4] if len(a) > 4 else 0.0
-            sweep = int(a[5]) if len(a) > 5 else 0
-            size = int(a[6]) if len(a) > 6 else 0
-            closed = int(a[7]) if len(a) > 7 else 0
-            r = math.hypot(x2 - x1, y2 - y1) / 2
+            rx = a[4] if len(a) > 4 and given[4] else math.hypot(x2 - x1, y2 - y1) / 2
+            ry = a[5] if len(a) > 5 and given[5] else rx
+            angle = a[6] if len(a) > 6 and given[6] else 0.0
+            clockwise = not (len(a) > 7 and given[7] and int(a[7]) != 0)
+            small = not (len(a) > 8 and given[8] and int(a[8]) != 0)
+            closed = len(a) > 9 and given[9] and int(a[9]) != 0
             cr.move_to(x1, y1)
-            _svg_arc(cr, x1, y1, r, r, angle, size, sweep == 0, x2, y2)
+            _svg_arc(cr, x1, y1, rx, ry, angle, 0 if small else 1, clockwise, x2, y2)
             if closed:
                 cr.close_path()
         elif k == "curve":
@@ -226,9 +245,9 @@ class ShapeMeter(Meter):
                 rx = v[2] if len(v) > 2 else math.hypot(ex - x, ey - y) / 2
                 ry = v[3] if len(v) > 3 else rx
                 angle = v[4] if len(v) > 4 else 0.0
-                sweep = int(v[5]) if len(v) > 5 else 0
-                size = int(v[6]) if len(v) > 6 else 0
-                _svg_arc(cr, x, y, rx, ry, angle, size, sweep == 0, ex, ey)
+                clockwise = not (len(v) > 5 and int(v[5]) != 0)  # 0 = clockwise (default)
+                small = not (len(v) > 6 and int(v[6]) != 0)  # 0 = small arc (default)
+                _svg_arc(cr, x, y, rx, ry, angle, 0 if small else 1, clockwise, ex, ey)
                 x, y = ex, ey
             elif w == "curveto" and len(v) >= 4:
                 if len(v) >= 6:
@@ -245,13 +264,7 @@ class ShapeMeter(Meter):
         """Apply Rotate/Scale/Skew/Offset (anchors default to the shape's centre)."""
         if not sd.transforms:
             return
-        scratch.save()
-        scratch.identity_matrix()
-        scratch.new_path()
-        self._path(scratch, sd)
-        x1, y1, x2, y2 = scratch.fill_extents() if sd.kind != "line" else scratch.stroke_extents()
-        scratch.new_path()
-        scratch.restore()
+        x1, y1, x2, y2 = self._anchor_extents(sd, scratch)
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
         # Points go through the ops in TransformOrder; Cairo composes in reverse.
         for op in reversed([o for o in sd.order if o in sd.transforms]):
@@ -293,6 +306,29 @@ class ShapeMeter(Meter):
         rel = m.multiply(_inverted(base))
         return rel
 
+    def _anchor_extents(self, sd: ShapeDef, scratch: Any) -> tuple[float, float, float, float]:
+        """Bounds that transform anchors refer to: the shape's path, or a Combine's combined parts."""
+        if sd.kind == "combine":
+            import cairo
+
+            tmp = cairo.Context(cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1))
+            for part in self._combine_parts(sd):
+                self._build(tmp, part, scratch)
+            return tmp.fill_extents()
+        scratch.save()
+        scratch.identity_matrix()
+        scratch.new_path()
+        self._path(scratch, sd)
+        ext = scratch.fill_extents() if sd.kind != "line" else scratch.stroke_extents()
+        scratch.new_path()
+        scratch.restore()
+        return ext
+
+    def _combine_parts(self, sd: ShapeDef) -> list[ShapeDef]:
+        """A Combine's base shape followed by its operands (missing ones skipped)."""
+        keys = ([_shape_key(sd.args[0])] if sd.args and sd.args[0].strip() else []) + [k for _op, k in sd.combine]
+        return [self.by_key[k] for k in keys if k in self.by_key]
+
     def update_meter(self) -> None:
         try:
             import cairo
@@ -304,18 +340,27 @@ class ShapeMeter(Meter):
         scratch = cairo.Context(surf)
         right = bottom = 0.0
         for sd in self.drawn:
-            for part in [sd] + [self.by_key[k] for _op, k in sd.combine if k in self.by_key]:
+            if sd.kind == "combine":
                 cr.new_path()
-                self._build(cr, part, scratch)
+                cr.save()
+                self._transform(cr, sd, scratch)  # the Combine's own Rotate/Scale/Offset
+                for part in self._combine_parts(sd):
+                    self._build(cr, part, scratch)
+                cr.restore()
                 x1, y1, x2, y2 = cr.fill_extents()
-                if part.kind in ("line", "arc", "curve", "path") or (x2 - x1) * (y2 - y1) == 0:
-                    sx1, sy1, sx2, sy2 = _stroke_box(cr, max(sd.stroke_width, 1.0))
-                    x2, y2 = max(x2, sx2), max(y2, sy2)
-                if sd.stroke is not None and sd.stroke_width > 0:
-                    x2 += sd.stroke_width / 2
-                    y2 += sd.stroke_width / 2
-                right = max(right, x2)
-                bottom = max(bottom, y2)
+                right, bottom = max(right, x2), max(bottom, y2)
+                continue
+            cr.new_path()
+            self._build(cr, sd, scratch)
+            x1, y1, x2, y2 = cr.fill_extents()
+            if sd.kind in ("line", "arc", "curve", "path") or (x2 - x1) * (y2 - y1) == 0:
+                sx1, sy1, sx2, sy2 = _stroke_box(cr, max(sd.stroke_width, 1.0))
+                x2, y2 = max(x2, sx2), max(y2, sy2)
+            if sd.stroke is not None and sd.stroke_width > 0:
+                x2 += sd.stroke_width / 2
+                y2 += sd.stroke_width / 2
+            right = max(right, x2)
+            bottom = max(bottom, y2)
         cr.new_path()
         self.natural_size(math.ceil(max(0.0, right)), math.ceil(max(0.0, bottom)))
 
@@ -388,7 +433,7 @@ class ShapeMeter(Meter):
         for sd in self.drawn:
             cr.save()
             try:
-                if sd.combine:
+                if sd.kind == "combine":
                     self._draw_combined(cr, sd, scratch)
                     continue
                 cr.new_path()
@@ -406,15 +451,20 @@ class ShapeMeter(Meter):
                 cr.restore()
 
     def _draw_combined(self, cr: Any, sd: ShapeDef, scratch: Any) -> None:
+        """Rainmeter's Combine: a copy of the base shape (its fill) merged with the operands,
+        then the Combine's own transforms. Filled through a mask (Cairo has no path booleans,
+        so a combined shape's stroke is not drawn)."""
         import cairo
 
-        base = self.by_key.get(sd.args[0].strip().lower()) if sd.args and sd.args[0].strip() else None
+        base = self.by_key.get(_shape_key(sd.args[0])) if sd.args and sd.args[0].strip() else None
         if base is None:
             log.warning("[%s] Combine: base shape %r not found", self.name, sd.args)
             return
         ops = {"union": cairo.OPERATOR_OVER, "intersect": cairo.OPERATOR_IN, "xor": cairo.OPERATOR_XOR,
                "exclude": cairo.OPERATOR_DEST_OUT}
         cr.push_group()
+        cr.save()
+        self._transform(cr, sd, scratch)
         cr.set_source_rgba(1, 1, 1, 1)
         cr.new_path()
         self._build(cr, base, scratch)
@@ -430,10 +480,10 @@ class ShapeMeter(Meter):
             self._build(cr, other, scratch)
             cr.fill()
             cr.restore()
+        cr.restore()
         mask = cr.pop_group()
         ext = self._shape_extents(base, scratch)
-        identity = cairo.Matrix()
-        if sd.fill is not None and self._paint(cr, sd.fill, identity, ext):
+        if base.fill is not None and self._paint(cr, base.fill, cairo.Matrix(), ext):
             cr.mask(mask)
 
 

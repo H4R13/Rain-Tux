@@ -28,6 +28,16 @@ def rainmeter_strftime(fmt: str, dt: datetime) -> str:
         return dt.strftime(fmt.replace("%-", "%"))
 
 
+# C strptime shorthands that Python's strptime lacks (Rainmeter's TimeStampFormat accepts them).
+_STRPTIME_SHORTHANDS = {"%D": "%m/%d/%y", "%T": "%H:%M:%S", "%R": "%H:%M", "%F": "%Y-%m-%d",
+                        "%r": "%I:%M:%S %p", "%e": "%d", "%h": "%b", "%n": " ", "%t": " "}
+
+
+def _strptime_format(fmt: str) -> str:
+    fmt = fmt.strip().strip('"').replace("%#", "%")
+    return re.sub(r"%[DTRFrehnt]", lambda m: _STRPTIME_SHORTHANDS[m.group(0)], fmt)
+
+
 class TimeMeasure(Measure):
     def read_measure(self) -> None:
         self.fmt = self.get("format", "%H:%M:%S")
@@ -42,7 +52,7 @@ class TimeMeasure(Measure):
         if self.timestamp:
             if self.timestamp_format:
                 try:
-                    return datetime.strptime(self.timestamp, self.timestamp_format.replace("%#", "%"))
+                    return datetime.strptime(self.timestamp.strip('"'), _strptime_format(self.timestamp_format))
                 except ValueError:
                     pass
             try:

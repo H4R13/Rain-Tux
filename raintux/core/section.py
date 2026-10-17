@@ -52,7 +52,7 @@ class Section:
         self.skin = skin
         self.name = name
         self.raw = {k.lower(): v for k, v in raw.items()}
-        self.overrides: dict[str, str] = {}
+        self.overrides: dict[str, str | None] = {}  # None: deleted by !SetOption with ""
         self.opts: dict[str, str] = {}
         self.dynamic = False
         self.groups: set[str] = set()
@@ -68,8 +68,10 @@ class Section:
     def option_raw(self, key: str) -> str | None:
         key = key.lower()
         if key in self.overrides:
-            return self.overrides[key]
-        if key in self.raw:
+            value = self.overrides[key]
+            if value is not None:
+                return value
+        elif key in self.raw:
             return self.raw[key]
         for style in self.styles():
             if key in style:
@@ -84,7 +86,8 @@ class Section:
         return list(keys)
 
     def set_option(self, key: str, value: str) -> None:
-        self.overrides[key.lower()] = value
+        """``!SetOption``; an empty value deletes the option so the MeterStyle (or default) applies."""
+        self.overrides[key.lower()] = value if value != "" else None
         self.needs_read = True
 
     # --- resolved values -----------------------------------------------------
@@ -92,7 +95,6 @@ class Section:
         """Resolve every option's variables (and section variables when dynamic)."""
         dv = self.option_raw("dynamicvariables")
         self.dynamic = dv is not None and parse_number(self.skin.resolve(dv), 0.0) != 0
-        always = self.always_dynamic()
         self.opts = {}
         for key in self.all_keys():
             raw = self.option_raw(key)
@@ -100,18 +102,15 @@ class Section:
                 continue
             if "currentsection" in raw.lower():
                 raw = _CURRENT_SECTION.sub(lambda _m: self.name, raw)
-            # Bang options get their [section variables] when they run, not now.
+            # Rainmeter resolves [section variables] on every read (DynamicVariables only makes
+            # it re-read each update); bang options get theirs when they run.
             is_action = "action" in key or key == "buttoncommand"
-            self.opts[key] = self.skin.resolve(raw, section_vars=not is_action and (self.dynamic or key in always))
+            self.opts[key] = self.skin.resolve(raw, section_vars=not is_action)
         self.groups = {g.strip().lower() for g in self.get("group").split("|") if g.strip()}
         div = self.get_int("updatedivider", self.default_update_divider())
         self.update_divider = div if div != 0 else 1
         self.read_options()
         self.needs_read = False
-
-    def always_dynamic(self) -> set[str]:
-        """Options that resolve section variables even without DynamicVariables."""
-        return set()
 
     def default_update_divider(self) -> int:
         return 1

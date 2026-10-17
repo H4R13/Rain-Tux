@@ -28,9 +28,6 @@ class StringMeter(Meter):
     h_align = "left"
     v_align = "top"
 
-    def always_dynamic(self) -> set[str]:
-        return {"text", "prefix", "postfix", "tooltiptext"}
-
     def read_meter(self) -> None:
         self.face = self.get("fontface", "Arial") or "Arial"
         self.size = self.get_number("fontsize", 10)

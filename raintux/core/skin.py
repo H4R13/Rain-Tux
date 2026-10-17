@@ -688,9 +688,16 @@ class Skin:
             for i, cmd in enumerate(commands):
                 if self.closed:
                     return
-                cmd = self.replace_section_variables(cmd, source)
+                if not cmd.startswith("!"):
+                    # A program to run, or a whole bang from a variable ([#MyBang]).
+                    cmd = self.replace_section_variables(cmd, source)
+                    if cmd.startswith("["):
+                        self._run_commands(split_commands(cmd), source)
+                        continue
                 if cmd.startswith("!"):
-                    args = split_args(cmd[1:])
+                    # Like Rainmeter's CommandHandler: split first, then resolve [Section]
+                    # variables per argument, so a value like "497.2 M" stays one argument.
+                    args = [self.replace_section_variables(a, source) for a in split_args(cmd[1:])]
                     if not args:
                         continue
                     name = args[0].lower()

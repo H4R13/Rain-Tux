@@ -140,3 +140,32 @@ def test_legacy_text_padding_keeps_the_full_width(tmp_path: Path) -> None:
     mt = skin.meter("MeterDigit")
     cr = cairo.Context(cairo.ImageSurface(cairo.FORMAT_ARGB32, 10, 10))
     assert not T.make_layout(cr, mt.text, mt.style).is_ellipsized()
+
+
+def test_bang_arguments_split_before_section_variables(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeasureText]
+        Measure=String
+        String=497.2 M
+
+        [Variables]
+        Ram=none
+    """)
+    skin.update()
+    skin.execute("[!SetVariable Ram [MeasureText]]")  # ModernGadgets: the value has a space
+    assert skin.get_variable("Ram") == "497.2 M"
+
+
+def test_empty_set_option_falls_back_to_the_style(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [StyleDay]
+        FontColor=255,0,0
+
+        [MeterDay]
+        Meter=String
+        MeterStyle=StyleDay
+        FontColor=0,255,0
+        Text=1
+    """)
+    skin.execute('[!SetOption MeterDay FontColor ""][!UpdateMeter MeterDay]')  # ModernGadgets' calendar
+    assert skin.meter("MeterDay").color_ == (1.0, 0.0, 0.0, 1.0)

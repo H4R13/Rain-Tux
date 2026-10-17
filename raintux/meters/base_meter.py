@@ -174,7 +174,7 @@ class Meter(Section):
     def styles(self) -> list[dict[str, str]]:
         spec = self.raw.get("meterstyle", "")
         if "meterstyle" in self.overrides:
-            spec = self.overrides["meterstyle"]
+            spec = self.overrides["meterstyle"] or ""
         if not spec:
             return []
         if self._style_cache and self._style_cache[0] == spec:
