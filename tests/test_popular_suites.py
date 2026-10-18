@@ -194,6 +194,29 @@ def test_variable_names_with_spaces(tmp_path: Path) -> None:
     assert skin.meter("MeterHash").text == "Track #1 of Dateien, #Files#"
 
 
+def test_regexp_substitute_like_rainmeter(tmp_path: Path) -> None:
+    r"""Monterey's Notes use Substitute="\r\n":"[*\13*][*\10*]" with no groups: Python's re.sub
+    refused "\13". Rainmeter only fills \N of groups that matched, never takes an empty match on
+    non-empty text, and goes on after what it inserted."""
+    skin, _ = make_skin(tmp_path, r"""
+        [MeasureNotes]
+        Measure=String
+        String=one#CRLF#two
+        RegExpSubstitute=1
+        Substitute="\n":"[*\13*]","^":"start ","(\w+)":"<\1>","(x)?y":"[\1]"
+
+        [MeasureEmpty]
+        Measure=String
+        String=
+        RegExpSubstitute=1
+        Substitute="":"none"
+    """)
+    skin.update()
+    # [*\13*] is read as [\13] (an escaped section variable); "(\w+)" then wraps "13" as well.
+    assert skin.measure("MeasureNotes").string_value() == r"<one>[\<13>]<two>"
+    assert skin.measure("MeasureEmpty").string_value() == "none"
+
+
 @pytest.mark.parametrize(("z", "layer"), [(-2, "BOTTOM"), (-1, "BOTTOM"), (0, "BOTTOM"), (1, "TOP"), (2, "OVERLAY")])
 def test_on_desktop_skins_stay_above_the_wallpaper(z: int, layer: str) -> None:
     """Sonder's skins are AlwaysOnTop=-2; on the background layer swaybg covered them."""

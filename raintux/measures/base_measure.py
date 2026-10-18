@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import math
 import re
@@ -71,6 +72,39 @@ def trim_number(value: float) -> str:
 def _parse_substitute(spec: str) -> list[tuple[str, str]]:
     """``"a":"b","c":"d"`` → pairs (quotes may be ``"`` or ``'``)."""
     return [(m.group(2), m.group(4)) for m in re.finditer(r"""(["'])(.*?)\1\s*:\s*(["'])(.*?)\3""", spec, re.S)]
+
+
+@functools.lru_cache(maxsize=2048)
+def _compiled_substitute(pattern: str) -> re.Pattern[str] | None:
+    try:
+        return re.compile(pcre_to_python(pattern))
+    except re.error as e:
+        log.info("Substitute %r: %s (used as plain text)", pattern, e)
+        return None
+
+
+def regexp_substitute(regex: re.Pattern[str], replacement: str, text: str) -> str:
+    r"""One RegExpSubstitute pair, as Rainmeter's Measure::CheckSubstitute applies it: an empty
+    match is no match (PCRE_NOTEMPTY) unless the text is empty; in the replacement only ``\N`` of
+    groups that matched something is replaced, other text (``\13``) stays; matching goes on after
+    the inserted text."""
+    pos = 0
+    while pos <= len(text):
+        m = next((x for x in regex.finditer(text, pos) if x.end() > x.start() or not text), None)
+        if m is None:
+            break
+        result = replacement
+        used = [j for j in range(len(m.groups()), 0, -1) if m.start(j) >= 0]
+        if used:  # rc > 1: the groups up to the highest one that matched, then \0
+            for j in range(used[0], -1, -1):
+                start, end = m.span(j)
+                if start >= 0 and end > start:
+                    result = result.replace("\\" + str(j), m.group(j))
+        text = text[:m.start()] + result + text[m.end():]
+        if m.end() == m.start():
+            break  # the empty text was replaced once
+        pos = m.start() + len(result)
+    return text
 
 
 def pcre_to_python(pattern: str) -> str:
@@ -213,12 +247,15 @@ class Measure(Section):
 
     def apply_substitute(self, text: str) -> str:
         for pat, rep in self.substitute:
+            if pat == rep:
+                continue  # Rainmeter drops these when it reads them
             if self.regexp_substitute:
-                try:
-                    text = re.sub(pcre_to_python(pat), re.sub(r"\\(\d)", r"\\g<\1>", rep), text)
-                except re.error as e:
-                    log.warning("[%s] bad RegExpSubstitute %r: %s", self.name, pat, e)
-            elif pat:
+                regex = _compiled_substitute(pat or "^$")
+                if regex is not None:
+                    text = regexp_substitute(regex, rep, text)
+                    continue
+                # A pattern PCRE refuses works as plain text (Measure::CheckSubstitute).
+            if pat:
                 text = text.replace(pat, rep)
             elif not text:
                 text = rep
