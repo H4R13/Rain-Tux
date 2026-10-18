@@ -57,7 +57,7 @@ _BUILTIN: dict[str, str] = {
     "sysinfo": "plugins.system:SysInfoPlugin",
     "usagemonitor": "plugins.system:UsageMonitorPlugin",
     "wifistatus": "plugins.system:WiFiStatusPlugin",
-    "perfmon": "misc_measures:UnsupportedMeasure",
+    "perfmon": "plugins.system:PerfMonPlugin",
     "resmon": "misc_measures:UnsupportedMeasure",
     "itunes": "plugins.media:NowPlayingPlugin",
     "windowmessage": "misc_measures:UnsupportedMeasure",
@@ -97,7 +97,7 @@ _PLUGINS: dict[str, str] = {
     "configactive": "desktop:ConfigActivePlugin",
     "syscolor": "desktop:SysColorPlugin",
     "frostedglass": "desktop:NoEffectPlugin",
-    "perfmon": "",
+    "perfmon": "system:PerfMonPlugin",
     "resmon": "",
     "windowmessageplugin": "",
 }

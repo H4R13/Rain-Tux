@@ -319,6 +319,52 @@ def test_old_execute_bang(tmp_path: Path) -> None:
     assert (skin.get_variable("playertxt"), skin.get_variable("b")) == ("closed", "2")
 
 
+def test_disk_performance_counters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ModernGadgets' disks showed 100% activity: UsageMonitor Category=LogicalDisk was answered with
+    process CPU. Win10 Widgets' PerfMon "% Disk Time" read 0. Both now come from /proc/diskstats."""
+    from types import SimpleNamespace
+
+    from raintux.measures.plugins import system
+
+    clock = [100.0]
+    io = SimpleNamespace(busy_time=0, read_bytes=0, write_bytes=0, read_time=0, write_time=0,
+                         read_count=0, write_count=0)
+    monkeypatch.setattr(system.time, "monotonic", lambda: clock[0])
+    sample = lambda: SimpleNamespace(**vars(io))  # noqa: E731 - psutil returns a new tuple each time
+    monkeypatch.setattr(system.psutil, "disk_io_counters",
+                        lambda perdisk=False: {"sda1": sample()} if perdisk else sample())
+    monkeypatch.setattr(system, "_disk_device", lambda drive: "sda1")
+    skin, _ = make_skin(tmp_path, """
+        [MeasureIdle]
+        Measure=Plugin
+        Plugin=UsageMonitor
+        Category=LogicalDisk
+        Counter=% Idle Time
+        Name=C:
+
+        [MeasureRead]
+        Measure=Plugin
+        Plugin=UsageMonitor
+        Category=LogicalDisk
+        Counter=Disk Read Bytes/sec
+        Name=C:
+
+        [MeasureDisk]
+        Measure=Plugin
+        Plugin=PerfMon
+        PerfMonObject=LogicalDisk
+        PerfMonCounter="% Disk Time"
+        PerfMonInstance=_Total
+    """)
+    skin.update()
+    clock[0] += 2.0
+    io.busy_time, io.read_bytes = 500, 4096  # busy 500 ms of 2 s
+    skin.update()
+    assert skin.measure("MeasureIdle").value == pytest.approx(75.0)
+    assert skin.measure("MeasureRead").value == pytest.approx(2048.0)
+    assert skin.measure("MeasureDisk").value == pytest.approx(25.0)
+
+
 @pytest.mark.parametrize("new_on_top", [True, False])
 @pytest.mark.parametrize("current", ["abcd", "dcba", "badc", "acbd", "dabc", "bcda"])
 def test_restack_plan_orders_a_layer(current: str, new_on_top: bool) -> None:

@@ -377,13 +377,102 @@ class _ProcTable:
 _TABLE = _ProcTable()
 
 
+def _disk_device(drive: str) -> str | None:
+    """psutil's per-disk key ("nvme0n1p2", "sda1", "dm-0") for a drive letter or path."""
+    from raintux.measures.disk_measure import map_drive, partitions
+
+    path = map_drive(drive if ":" in drive or drive.startswith("/") else drive + ":")
+    if not path:
+        return None
+    part = next((p for p in sorted(partitions(True), key=lambda p: -len(p.mountpoint))
+                 if path.startswith(p.mountpoint) and p.device.startswith("/dev/")), None)
+    if part is None:
+        return None
+    return os.path.basename(os.path.realpath(part.device))
+
+
+class DiskCounters:
+    """Windows' LogicalDisk / PhysicalDisk performance counters for one instance (``C:`` or
+    ``_Total``), from /proc/diskstats. Rates are per second since this object's last sample."""
+
+    def __init__(self, counter: str, instance: str) -> None:
+        self.counter = counter.strip().lower()
+        self.instance = instance.strip() or "_Total"
+        self._prev: tuple[float, Any] | None = None
+
+    def _io(self) -> Any:
+        if self.instance.lower() == "_total":
+            return psutil.disk_io_counters(perdisk=False)
+        dev = _disk_device(self.instance)
+        return psutil.disk_io_counters(perdisk=True).get(dev) if dev else None
+
+    def value(self) -> float:
+        c = self.counter
+        if c in ("free megabytes", "% free space"):
+            from raintux.measures.disk_measure import map_drive
+
+            path = "/" if self.instance.lower() == "_total" else map_drive(self.instance)
+            try:
+                usage = psutil.disk_usage(path or "/")
+            except OSError:
+                return 0.0
+            return usage.free / 1048576 if c == "free megabytes" else usage.free * 100.0 / max(1, usage.total)
+        now, io = time.monotonic(), self._io()
+        prev, self._prev = self._prev, (now, io)
+        if io is None or prev is None or prev[1] is None or now <= prev[0]:
+            return 100.0 if c == "% idle time" else 0.0
+        dt, p = now - prev[0], prev[1]
+
+        def rate(attr: str) -> float:
+            return max(0.0, (getattr(io, attr, 0) - getattr(p, attr, 0)) / dt)
+
+        busy = min(100.0, rate("busy_time") / 10.0)  # ms per second -> %
+        return {
+            "% idle time": 100.0 - busy, "% disk time": busy,
+            "% disk read time": min(100.0, rate("read_time") / 10.0),
+            "% disk write time": min(100.0, rate("write_time") / 10.0),
+            "disk read bytes/sec": rate("read_bytes"), "disk write bytes/sec": rate("write_bytes"),
+            "disk bytes/sec": rate("read_bytes") + rate("write_bytes"),
+            "disk reads/sec": rate("read_count"), "disk writes/sec": rate("write_count"),
+            "disk transfers/sec": rate("read_count") + rate("write_count"),
+        }.get(c, 0.0)
+
+
+class PerfMonPlugin(Measure):
+    """The old PerfMon plugin: ``PerfMonObject`` LogicalDisk / PhysicalDisk, ``PerfMonCounter``,
+    ``PerfMonInstance`` (Win10 Widgets' disk graph); other objects read 0."""
+
+    def read_measure(self) -> None:
+        obj = self.get("perfmonobject").strip().lower()
+        key = (obj, self.get("perfmoncounter"), self.get("perfmoninstance"))
+        if getattr(self, "_key", None) != key:
+            self._key = key
+            self.counters = (DiskCounters(key[1], key[2]) if obj in ("logicaldisk", "physicaldisk") else None)
+            if self.counters is None:
+                log.info("[%s] PerfMon object %r is not available on Linux", self.name, obj)
+        if key[1].strip().startswith("%") and not self.has("maxvalue"):
+            self.max_value = 100.0
+
+    def update_value(self) -> None:
+        self._raw_number = self.counters.value() if self.counters is not None else 0.0
+
+
 class UsageMonitorPlugin(Measure):
     """``Alias=CPU|RAM|IO`` (or Category/Counter), ``Index=N`` for the Nth busiest process, ``Name=`` for one."""
 
     def read_measure(self) -> None:
         alias = self.get("alias").strip().upper()
         counter = self.get("counter").lower()
-        category = self.get("category").lower()
+        category = self.get("category").strip().lower()
+        self.disk: DiskCounters | None = None
+        if category in ("logicaldisk", "physicaldisk"):
+            key = (counter, self.get("name"))
+            if getattr(self, "_disk_key", None) != key:  # keep the previous sample across re-reads
+                self._disk_key, self._disk_counters = key, DiskCounters(counter, self.get("name"))
+            self.disk = self._disk_counters
+            if counter.startswith("%") and not self.has("maxvalue"):
+                self.max_value = 100.0
+            return
         if not alias:
             if "working set" in counter or "memory" in category:
                 alias = "RAM"
@@ -399,6 +488,10 @@ class UsageMonitorPlugin(Measure):
             self.max_value = 100.0
 
     def update_value(self) -> None:
+        if self.disk is not None:
+            self._raw_number = self.disk.value()
+            self.string = None
+            return
         col = {"CPU": 1, "RAM": 2, "IO": 3}.get(self.alias, 1)
         rows = [r for r in _TABLE.sample() if r[0].lower() not in self.blacklist and r[0].lower() != "idle"]
         if self.proc_name and self.proc_name != "_total":
