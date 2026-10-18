@@ -23,6 +23,16 @@ except (ImportError, ValueError):  # pragma: no cover
 
 _measure_ctx: Any = None
 _font_options: Any = None
+_measured: dict[tuple, tuple[float, float]] = {}  # (text, style) -> measure(); cleared when fonts change
+# Pango.Weight's named values: PyGObject accepts only these, while skins write any 1..999
+# (DirectWrite takes them all; a variable font shows 650 between 600 and 700).
+_WEIGHTS = (100, 200, 300, 350, 380, 400, 500, 600, 700, 800, 900, 1000)
+
+
+def pango_weight(weight: float) -> Any:
+    """The nearest Pango.Weight (ties go to the heavier one)."""
+    w = max(100, min(1000, int(weight)))
+    return Pango.Weight(min(_WEIGHTS, key=lambda v: (abs(v - w), -v)))
 
 
 @dataclass
@@ -73,6 +83,7 @@ def reset_font_cache() -> None:
     """
     global _measure_ctx
     _measure_ctx = None
+    _measured.clear()
     if not HAVE_PANGO:
         return
     try:
@@ -105,7 +116,7 @@ def make_layout(cr: Any, text: str, style: TextStyle) -> Any:
     desc = Pango.FontDescription()
     desc.set_family(style.face or "Sans")
     desc.set_size(max(1, int(style.size * Pango.SCALE)))
-    desc.set_weight(Pango.Weight(max(100, min(1000, int(style.weight)))))
+    desc.set_weight(pango_weight(style.weight))
     if style.italic:
         desc.set_style(Pango.Style.ITALIC)
     layout.set_font_description(desc)
@@ -145,7 +156,7 @@ def _attributes(text: str, inline: list[tuple[int, int, str, Any]]) -> Any:
         elif kind == "size":
             a = Pango.attr_size_new(int(value * Pango.SCALE))
         elif kind == "weight":
-            a = Pango.attr_weight_new(Pango.Weight(int(value)))
+            a = Pango.attr_weight_new(pango_weight(value))
         elif kind == "italic":
             a = Pango.attr_style_new(Pango.Style.ITALIC)
         elif kind == "oblique":
@@ -180,12 +191,21 @@ def measure(text: str, style: TextStyle) -> tuple[float, float]:
         if style.width and (style.wrap or style.ellipsize):
             w = min(w, style.width)
         return (w, len(lines) * px * 1.2)
+    key = (text, style.face, style.size, style.weight, style.italic, style.h_align, style.width, style.height,
+           style.wrap, style.ellipsize, tuple((a, b, k, v if not isinstance(v, list) else tuple(v))
+                                                for a, b, k, v in style.inline))
+    hit = _measured.get(key)
+    if hit is not None:
+        return hit
     layout = make_layout(_ctx(), text, style)
     _ink, logical = layout.get_pixel_extents()
     w = float(logical.width)
     if style.width is not None and style.width > 0 and layout.get_width() > 0:
         w = min(max(w, 0.0), style.width) if style.h_align == "left" else style.width
-    return (w, float(logical.height))
+    if len(_measured) > 20000:
+        _measured.clear()
+    _measured[key] = (w, float(logical.height))
+    return _measured[key]
 
 
 def draw(cr: Any, text: str, style: TextStyle, x: float, y: float, w: float, h: float, effect: str = "",

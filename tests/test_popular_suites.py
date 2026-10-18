@@ -255,6 +255,23 @@ def test_reg_query_accent_palette(monkeypatch: pytest.MonkeyPatch) -> None:
     assert code == 1 and "unable to find" in out
 
 
+@pytest.mark.gtk
+def test_any_font_weight_draws(tmp_path: Path) -> None:
+    """JaxCore and Expressive Windows use FontWeight=650 / 999; Pango.Weight(650) raised."""
+    from raintux.meters.text import pango_weight
+
+    skin, _ = make_skin(tmp_path, """
+        [MeterText]
+        Meter=String
+        Text=Hello
+        FontWeight=650
+        InlineSetting=Weight | 999
+    """)
+    skin.update()
+    assert skin.meter("MeterText").w > 0
+    assert (int(pango_weight(650)), int(pango_weight(1)), int(pango_weight(999))) == (700, 100, 1000)
+
+
 def test_run_command_answers_wmic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """SysDash shows the GPU name from ``wmic path win32_VideoController get name``."""
     from raintux.compat import windows
