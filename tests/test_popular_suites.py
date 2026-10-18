@@ -192,3 +192,11 @@ def test_variable_names_with_spaces(tmp_path: Path) -> None:
     assert skin.meter("MeterText").text == "Papierkorb - Dateien 3"
     # "#1 of #" names no variable, so its closing "#" starts "#Files#" (Rainmeter's scan).
     assert skin.meter("MeterHash").text == "Track #1 of Dateien, #Files#"
+
+
+@pytest.mark.parametrize(("z", "layer"), [(-2, "BOTTOM"), (-1, "BOTTOM"), (0, "BOTTOM"), (1, "TOP"), (2, "OVERLAY")])
+def test_on_desktop_skins_stay_above_the_wallpaper(z: int, layer: str) -> None:
+    """Sonder's skins are AlwaysOnTop=-2; on the background layer swaybg covered them."""
+    from raintux.core.position import layer_for_zpos
+
+    assert layer_for_zpos(z) == layer

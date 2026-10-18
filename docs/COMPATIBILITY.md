@@ -66,7 +66,7 @@ No effect on Linux: blur bangs, `!AutoSelectScreen`, `!ResetStats`, `!LsBoxHook`
 | Setting | Wayland (layer-shell) |
 |---------|-----------------------|
 | Position (WindowX/Y), multi-monitor | Margins on the right output |
-| AlwaysOnTop -2…2 | background, bottom, bottom, top, overlay layers |
+| AlwaysOnTop -2…2 | bottom, bottom, bottom, top, overlay layers (not background: wallpaper daemons draw there) |
 | Click through / transparent pixels | Input region |
 | Draggable, Snap to edges, Keep on screen, Save position | Same |
 | Transparency, fades, Hide on mouse over | Same |

@@ -196,3 +196,10 @@ def apply_skin_defaults(state: Any, option: Callable[[str], str | None], monitor
         raw = option("Default" + key)
         if raw is not None:
             setattr(state, attr, parse_number(resolve(raw) if resolve else raw, 0) != 0)
+
+
+def layer_for_zpos(z: int) -> str:
+    """Layer-shell layer for AlwaysOnTop -2..2. "On desktop" (-2) and "Bottom" (-1) both go on the
+    bottom layer: the background layer is where wallpaper daemons (swaybg, hyprpaper, swww) draw,
+    and a skin there is hidden whenever the wallpaper maps after it."""
+    return {1: "TOP", 2: "OVERLAY"}.get(z, "BOTTOM")

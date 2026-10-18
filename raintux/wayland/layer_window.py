@@ -17,6 +17,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk
 
+from raintux.core.position import layer_for_zpos
 from raintux.gui.compat import load_css
 
 if TYPE_CHECKING:
@@ -145,9 +146,7 @@ class SkinWindow(Gtk.ApplicationWindow):
     def apply_state(self) -> None:
         st = self.skin.state
         if self.layer:
-            layer = {-2: _LayerShell.Layer.BACKGROUND, -1: _LayerShell.Layer.BOTTOM, 0: _LayerShell.Layer.BOTTOM,
-                     1: _LayerShell.Layer.TOP, 2: _LayerShell.Layer.OVERLAY}.get(st.z, _LayerShell.Layer.BOTTOM)
-            _LayerShell.set_layer(self, layer)
+            _LayerShell.set_layer(self, getattr(_LayerShell.Layer, layer_for_zpos(st.z)))
         self.move_to(st.x, st.y)
         self.set_opacity(max(0.0, min(1.0, st.alpha / 255.0)))
         self.update_input_region(force=True)
