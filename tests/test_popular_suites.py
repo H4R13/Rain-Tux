@@ -365,6 +365,28 @@ def test_disk_performance_counters(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert skin.measure("MeasureDisk").value == pytest.approx(25.0)
 
 
+def test_write_key_value_into_rainmeter_ini(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skins set their own window options with !WriteKeyValue into #SETTINGSPATH#Rainmeter.ini
+    (Win10 Widgets, ModernGadgets); RainTux keeps them per config for the next refresh."""
+    from raintux.core.state import AppState, apply_rainmeter_ini_key
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    skin, host = make_skin(tmp_path, r"""
+        [Rainmeter]
+        OnRefreshAction=[!WriteKeyValue "#CURRENTCONFIG#" AlwaysOnTop -2 "#SETTINGSPATH#Rainmeter.ini"][!WriteKeyValue Rainmeter DisableDragging 1 "#SETTINGSPATH#Rainmeter.ini"]
+    """)
+    written: list[tuple[str, str, str]] = []
+    host.write_setting = lambda *a: written.append(a)  # type: ignore[attr-defined]
+    skin.execute(skin.rm.get("onrefreshaction"))
+    assert written == [("Test", "AlwaysOnTop", "-2"), ("Rainmeter", "DisableDragging", "1")]
+    assert not (tmp_path / "config" / "raintux" / "Rainmeter.ini").exists()
+    state = AppState()
+    assert apply_rainmeter_ini_key(state, "Test", "AlwaysOnTop", "-2")
+    assert apply_rainmeter_ini_key(state, "Test", "Draggable", "0")
+    assert not apply_rainmeter_ini_key(state, "Rainmeter", "DisableDragging", "1")
+    assert (state.config("Test").window.z, state.config("Test").window.draggable) == (-2, False)
+
+
 @pytest.mark.parametrize("new_on_top", [True, False])
 @pytest.mark.parametrize("current", ["abcd", "dcba", "badc", "acbd", "dabc", "bcda"])
 def test_restack_plan_orders_a_layer(current: str, new_on_top: bool) -> None:

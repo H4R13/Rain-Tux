@@ -50,6 +50,47 @@ class AppState:
         return items
 
 
+_INI_FLAGS = {"draggable": "draggable", "clickthrough": "click_through", "keeponscreen": "keep_on_screen",
+              "saveposition": "save_position", "snapedges": "snap_edges", "hideonmouseover": "hide_on_mouse_over"}
+
+
+def apply_rainmeter_ini_key(state: AppState, section: str, key: str, value: str) -> bool:
+    """A skin's ``!WriteKeyValue Config Key Value "#SETTINGSPATH#Rainmeter.ini"``: RainTux keeps
+    those settings here, and the skin's next refresh uses them, as Rainmeter's does. Returns False
+    for keys that mean nothing here ([Rainmeter] options, AutoSelectScreen...)."""
+    k, v = key.strip().lower(), value.strip()
+    if section.strip().lower() in ("rainmeter", "trayicon"):
+        return False
+    cs = state.config(section)
+    win = cs.window
+
+    def number(default: int) -> int:
+        try:
+            return int(float(v))
+        except ValueError:
+            return default
+
+    if k in _INI_FLAGS:
+        setattr(win, _INI_FLAGS[k], v != "0")
+    elif k == "windowx":
+        win.window_x = v
+    elif k == "windowy":
+        win.window_y = v
+    elif k in ("anchorx", "anchory"):
+        setattr(win, "anchor_" + k[-1], v)
+    elif k == "alwaysontop":
+        win.z = max(-2, min(2, number(0)))
+    elif k == "alphavalue":
+        win.alpha = max(0, min(255, number(255)))
+    elif k == "fadeduration":
+        win.fade_duration = max(0, number(250))
+    elif k == "loadorder":
+        cs.load_order = number(0)
+    else:
+        return False
+    return True
+
+
 def load_state(path: Path | None = None) -> AppState:
     p = path or state_path()
     if not p.is_file():

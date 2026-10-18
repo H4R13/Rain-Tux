@@ -881,6 +881,14 @@ class Skin:
         if not self.may_write(target):
             log.warning("[%s] !WriteKeyValue: illegal path: %s", self.config, target)
             return
+        from raintux.core.state import state_path
+
+        if target.name.lower() == "rainmeter.ini" and target.parent.resolve() == state_path().parent.resolve():
+            # Rainmeter's own settings file: RainTux keeps these per config (skins.json).
+            write_setting = getattr(self.host, "write_setting", None)
+            if write_setting is not None:
+                write_setting(section, key, self._evaluated(value))
+            return
         write_key_value(target, section, key, self._evaluated(value))
 
     def may_write(self, target: Path) -> bool:

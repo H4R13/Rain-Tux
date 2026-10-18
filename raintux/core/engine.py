@@ -680,6 +680,15 @@ class RainTuxEngine:
         except Exception:
             log.exception("[%s] command failed: %s", skin.config, command)
 
+    def write_setting(self, section: str, key: str, value: str) -> None:
+        """!WriteKeyValue into #SETTINGSPATH#Rainmeter.ini: kept for the config's next refresh."""
+        from raintux.core.state import apply_rainmeter_ini_key
+
+        if apply_rainmeter_ini_key(self.state, section, key, value):
+            self.schedule_save()
+        else:
+            log.debug("Rainmeter.ini [%s] %s has no effect on Linux", section, key)
+
     def _run_windows_action(self, skin: Skin, action: Any, command: str) -> None:
         """Run what a Windows click target means here (raintux.compat.shell)."""
         from raintux.compat.shell import ROLES
