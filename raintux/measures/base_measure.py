@@ -279,6 +279,16 @@ class Measure(Section):
             text = format_number(v, d, auto_scale, scale)
         return self.apply_substitute(text)
 
+    def report_error(self, key: str, msg: str, *args: Any) -> None:
+        """Log a parse error once, as Rainmeter does, until :meth:`clear_error` (it parsed again)."""
+        errors = self.__dict__.setdefault("_errors", set())
+        if key not in errors:
+            errors.add(key)
+            log.warning("[%s] " + msg, self.name, *args)
+
+    def clear_error(self, key: str) -> None:
+        self.__dict__.get("_errors", set()).discard(key)
+
     # -- if actions ------------------------------------------------------------
     def _fire(self, key: str, cond: bool, on_true: str, on_false: str = "", every: bool = False) -> None:
         if self._if_state.get(key) == cond and not every:
@@ -301,12 +311,18 @@ class Measure(Section):
         i = 1
         while (src := self.opts.get("ifcondition" + ("" if i == 1 else str(i)))) is not None:
             sfx = "" if i == 1 else str(i)
+            # IfActions::DoIfActions: a condition that doesn't parse does nothing (logged once until
+            # it parses again); 1 is true, 0 is false, any other result fires neither action.
             try:
-                cond = evaluate(self.skin.resolve(src, section_vars=True), self.skin.measure_number) != 0
+                result = evaluate(self.skin.resolve(src, section_vars=True), self.skin.measure_number)
             except FormulaError as e:
-                log.warning("[%s] IfCondition%s: %s", self.name, sfx, e)
-                cond = False
-            self._fire(f"cond{i}", cond, self.get(f"iftrueaction{sfx}"), self.get(f"iffalseaction{sfx}"), every)
+                self.report_error(f"ifcondition{sfx}", "IfCondition%s=%s: %s", sfx, src, e)
+                i += 1
+                continue
+            self.clear_error(f"ifcondition{sfx}")
+            if result in (0.0, 1.0):
+                self._fire(f"cond{i}", result == 1.0, self.get(f"iftrueaction{sfx}"),
+                           self.get(f"iffalseaction{sfx}"), every)
             i += 1
 
         every = self.get_bool("ifmatchmode")

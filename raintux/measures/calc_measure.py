@@ -50,8 +50,10 @@ class CalcMeasure(Measure):
         try:
             self._raw_number = evaluate(self.formula, resolve)
         except FormulaError as e:
-            log.warning("[%s] Formula: %s", self.name, e)
-            self._raw_number = 0.0
+            # MeasureCalc::UpdateValue: the value stays, the error is logged once until it parses.
+            self.report_error("formula", "Formula=%s: %s", self.formula, e)
+            return
+        self.clear_error("formula")
 
     def command(self, args: str) -> None:
         log.info("[%s] Calc measures take no commands (%r)", self.name, args)

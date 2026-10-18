@@ -217,6 +217,41 @@ def test_regexp_substitute_like_rainmeter(tmp_path: Path) -> None:
     assert skin.measure("MeasureEmpty").string_value() == "none"
 
 
+def test_formula_errors_like_rainmeter(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Sonder's Formula=[@CurrentTemperature] is empty until the weather arrives: Rainmeter logs the
+    error once, keeps the Calc's value, and an IfCondition fires only on exactly 1 or 0."""
+    skin, _ = make_skin(tmp_path, """
+        [Variables]
+        Temp=21
+        Hits=0
+        Fives=0
+
+        [MeasureTemp]
+        Measure=Calc
+        Formula=#Temp#
+        DynamicVariables=1
+
+        [MeasureFive]
+        Measure=Calc
+        Formula=5
+        IfCondition=MeasureFive
+        IfTrueAction=[!SetVariable Fives 1]
+        IfFalseAction=[!SetVariable Fives -1]
+        IfCondition2=#Temp# > 20
+        IfTrueAction2=[!SetVariable Hits (#Hits#+1)]
+        DynamicVariables=1
+    """)
+    skin.update()
+    assert skin.measure("MeasureTemp").value == 21 and skin.get_variable("Hits") == "1"
+    skin.execute("[!SetVariable Temp \"\"]")
+    for _ in range(5):
+        skin.update()
+    assert skin.measure("MeasureTemp").value == 21  # kept
+    assert sum("Formula=" in r.message for r in caplog.records) == 1
+    assert sum("IfCondition2" in r.message for r in caplog.records) == 1
+    assert skin.get_variable("Fives") == "0"  # 5 is neither true nor false
+
+
 @pytest.mark.parametrize("new_on_top", [True, False])
 @pytest.mark.parametrize("current", ["abcd", "dcba", "badc", "acbd", "dabc", "bcda"])
 def test_restack_plan_orders_a_layer(current: str, new_on_top: bool) -> None:
