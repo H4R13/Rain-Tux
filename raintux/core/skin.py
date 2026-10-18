@@ -873,7 +873,24 @@ class Skin:
 
     def _bang_writekeyvalue(self, section: str, key: str, value: str, path: str | None = None) -> None:
         target = self.path(path) if path else self.ini_path
+        if not self.may_write(target):
+            log.warning("[%s] !WriteKeyValue: illegal path: %s", self.config, target)
+            return
         write_key_value(target, section, key, self._evaluated(value))
+
+    def may_write(self, target: Path) -> bool:
+        """Rainmeter's rule for !WriteKeyValue: a file in the skins folder or in the settings
+        (RainTux's config folder, layouts), whatever its extension (Fountain of Colors keeps its
+        settings in "FountainOfColors" and "Bands")."""
+        from raintux.core.config import layouts_root
+        from raintux.core.state import state_path
+
+        try:
+            real = target.resolve()
+        except OSError:
+            return False
+        roots = [self.skins_root, state_path().parent, layouts_root()]
+        return any(real.is_relative_to(r.resolve()) for r in roots if r is not None)
 
     def _bang_update(self) -> None:
         self.update()

@@ -255,6 +255,26 @@ def test_reg_query_accent_palette(monkeypatch: pytest.MonkeyPatch) -> None:
     assert code == 1 and "unable to find" in out
 
 
+def test_write_key_value_any_file_in_the_skins_folder(tmp_path: Path) -> None:
+    """Fountain of Colors writes its settings into extension-less files ("Bands"); Rainmeter
+    allows any existing file under Skins or the settings folder, and never creates one."""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("[Variables]\nA=1\n")
+    skin, _ = make_skin(tmp_path, r"""
+        [Rainmeter]
+        @Include=Bands
+
+        [Variables]
+        A=1
+    """, files={"Test/Bands": "[Variables]\nBands=10\n"})
+    skin.execute(r'[!WriteKeyValue Variables Bands 32 "#CURRENTPATH#Bands"]')
+    assert "Bands=32" in (skin.root / "Bands").read_text()
+    skin.execute(f'[!WriteKeyValue Variables A 2 "{outside}"]')
+    assert outside.read_text() == "[Variables]\nA=1\n"  # outside the skins folder
+    skin.execute(r'[!WriteKeyValue Variables A 2 "#CURRENTPATH#New.inc"]')
+    assert not (skin.root / "New.inc").exists()
+
+
 @pytest.mark.gtk
 def test_any_font_weight_draws(tmp_path: Path) -> None:
     """JaxCore and Expressive Windows use FontWeight=650 / 999; Pango.Weight(650) raised."""

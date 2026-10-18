@@ -9,7 +9,6 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 _SECTION = re.compile(r"^\s*\[([^\]]+)\]\s*$")
-WRITABLE_SUFFIXES = (".ini", ".inc", ".txt")
 
 
 def detect_encoding(raw: bytes) -> str:
@@ -28,13 +27,14 @@ def detect_encoding(raw: bytes) -> str:
 def write_key_value(path: Path, section: str, key: str, value: str) -> bool:
     """Set ``key=value`` in ``[section]`` of ``path``; adds the key or section when missing.
 
-    Only ``.ini``, ``.inc`` and ``.txt`` files are writable, as in Rainmeter.
+    The file must exist: like Rainmeter, this never creates one. Which files a skin may write is
+    the caller's rule (``Skin.may_write``).
     """
     path = Path(path)
-    if path.suffix.lower() not in WRITABLE_SUFFIXES:
-        log.warning("!WriteKeyValue refused for %s (only %s)", path, ", ".join(WRITABLE_SUFFIXES))
+    if not path.is_file():
+        log.warning("!WriteKeyValue: file not found: %s", path)
         return False
-    raw = path.read_bytes() if path.is_file() else b""
+    raw = path.read_bytes()
     enc = detect_encoding(raw) if raw else "utf-8"
     text = raw.decode(enc, errors="replace") if raw else ""
     newline = "\r\n" if "\r\n" in text else "\n"
@@ -69,7 +69,6 @@ def write_key_value(path: Path, section: str, key: str, value: str) -> bool:
                 insert -= 1
             lines.insert(insert, f"{key}={value}")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((newline.join(lines) + newline).encode(enc))
     except OSError as e:
         log.warning("!WriteKeyValue could not write %s: %s", path, e)
