@@ -104,6 +104,43 @@ class LoopMeasure(Measure):
             self.reset()
 
 
+class RegistryMeasure(Measure):
+    """``Measure=Registry`` over the keys :mod:`raintux.compat.windows` answers (CPU name, accent
+    colour, date formats, Windows version…); other keys read as missing (0, no string)."""
+
+    def read_measure(self) -> None:
+        self.hkey = self.get("reghkey", "HKEY_CURRENT_USER")
+        self.key = self.get("regkey")
+        self.value_name = self.get("regvalue")
+        self.output = self.get("outputtype", "Value").strip().lower()
+        self.delimiter = self.get("outputdelimiter", "\n")
+        if not self.has("maxvalue") or self.max_value == 0:
+            self.max_value = 1.0
+
+    def update_value(self) -> None:
+        from raintux.compat.windows import read_key, read_value, subkeys
+
+        self._raw_number, self.string = 0.0, None
+        if self.output == "subkeylist":
+            self.string = self.delimiter.join(subkeys(self.hkey, self.key)) or None
+            return
+        if self.output == "valuelist":
+            self.string = self.delimiter.join(read_key(self.hkey, self.key) or {}) or None
+            return
+        found = read_value(self.hkey, self.key, self.value_name)
+        if found is None:
+            return
+        kind, data = found
+        if kind in ("REG_DWORD", "REG_QWORD"):
+            self._raw_number = float(data)
+        elif kind == "REG_BINARY":
+            self.string = bytes(data).hex().upper() or None
+        else:
+            text = self.delimiter.join(data) if kind == "REG_MULTI_SZ" else str(data)
+            self.string = text or None
+            self._raw_number = parse_number(text.split(self.delimiter)[0] if text else "", 0.0)
+
+
 class UnsupportedMeasure(Measure):
     """Windows-only measure types (Registry, …): constant 0 / empty string, logged once."""
 

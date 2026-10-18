@@ -32,7 +32,7 @@ _BUILTIN: dict[str, str] = {
     "uptime": "misc_measures:UptimeMeasure",
     "loop": "misc_measures:LoopMeasure",
     "script": "script_measure:ScriptMeasure",
-    "registry": "misc_measures:UnsupportedMeasure",
+    "registry": "misc_measures:RegistryMeasure",
     # Current Rainmeter builds the old default plugins in as measure types.
     "webparser": "plugins.webparser:WebParserPlugin",
     "actiontimer": "plugins.actiontimer:ActionTimerPlugin",

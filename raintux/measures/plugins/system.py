@@ -224,6 +224,17 @@ class RunCommandPlugin(Measure):
             return ["/bin/sh", "-c", param]
         return [self.program, *split_args(param)]
 
+    def _windows_command(self) -> tuple[int, str] | None:
+        """Output of ``reg query`` / ``wmic`` answered from Linux (see :mod:`raintux.compat.windows`)."""
+        from raintux.compat.windows import emulate
+
+        prog = self.program.lower().replace("\\", "/").rsplit("/", 1)[-1]
+        param = self.parameter.strip()
+        if prog in ("", "cmd", "cmd.exe"):
+            param = re.sub(r"^(?:/[uUaA]\s+)*/[cCkK]\s+", "", param)
+            return emulate(split_args(param))
+        return emulate([self.program, *split_args(param)])
+
     def update_value(self) -> None:
         self._raw_number = self._exit
 
@@ -244,8 +255,11 @@ class RunCommandPlugin(Measure):
         argv = self._argv()
         cwd = str(self.skin.path(self.folder)) if self.folder else str(self.skin.root)
         timeout = self.timeout_ms / 1000.0 if self.timeout_ms > 0 else None
+        windows = self._windows_command()
 
         def work() -> tuple[int, str]:
+            if windows is not None:
+                return windows
             self._proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                           stdin=subprocess.DEVNULL, start_new_session=True)
             try:

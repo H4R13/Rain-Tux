@@ -200,3 +200,75 @@ def test_on_desktop_skins_stay_above_the_wallpaper(z: int, layer: str) -> None:
     from raintux.core.position import layer_for_zpos
 
     assert layer_for_zpos(z) == layer
+
+
+def test_registry_measure_reads_linux_facts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ModernGadgets reads the CPU name and the clock format from the registry."""
+    from raintux.compat import windows
+
+    monkeypatch.setattr(windows, "cpu_name", lambda: "Test CPU @ 3.00GHz")
+    monkeypatch.setattr(windows, "_langinfo", lambda item, default: {"T_FMT": "%H:%M:%S", "D_FMT": "%d.%m.%Y"}[item])
+    skin, _ = make_skin(tmp_path, r"""
+        [MeasureCpuName]
+        Measure=Registry
+        RegHKey=HKEY_LOCAL_MACHINE
+        RegKey=HARDWARE\DESCRIPTION\System\CentralProcessor\0
+        RegValue=ProcessorNameString
+
+        [MeasureShortTime]
+        Measure=Registry
+        RegHKey=HKEY_CURRENT_USER
+        RegKey=Control Panel\International
+        RegValue=sShortTime
+
+        [MeasureShortDate]
+        Measure=Registry
+        RegKey=Control Panel\International
+        RegValue=sShortDate
+
+        [MeasureMissing]
+        Measure=Registry
+        RegKey=Software\Gadgets\NetMonitor
+        RegValue=BytesPerSecIn
+    """)
+    skin.update()
+    assert skin.measure("MeasureCpuName").string_value() == "Test CPU @ 3.00GHz"
+    assert skin.measure("MeasureShortTime").string_value() == "HH:mm"
+    assert skin.measure("MeasureShortDate").string_value() == "dd.MM.yyyy"
+    assert skin.measure("MeasureMissing").value == 0
+
+
+def test_reg_query_accent_palette(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Win10 Widgets colours its date with the accent palette from ``reg query`` (bytes 9-11)."""
+    import re
+
+    from raintux.compat import windows
+
+    monkeypatch.setattr(windows, "accent_rgb", lambda: None)  # Windows' default blue
+    code, out = windows.emulate([r"C:\Windows\System32\reg.exe", "query",
+                                 r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Accent",
+                                 "/v", "AccentPalette"])
+    assert code == 0
+    hexes = re.search(r"REG_BINARY\s*([0-9A-F]+)", out).group(1)
+    assert len(hexes) == 64 and hexes[24:30] == "0078D7"  # the accent itself is the fourth colour
+    code, out = windows.emulate(["reg", "query", r"HKCU\Software\Nothing\Here"])
+    assert code == 1 and "unable to find" in out
+
+
+def test_run_command_answers_wmic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SysDash shows the GPU name from ``wmic path win32_VideoController get name``."""
+    from raintux.compat import windows
+
+    monkeypatch.setattr(windows, "gpu_names", lambda: ["Test GPU 9000"])
+    skin, host = make_skin(tmp_path, """
+        [MeasureGPUName]
+        Measure=Plugin
+        Plugin=RunCommand
+        Parameter=wmic path win32_VideoController get name
+        RegExpSubstitute=1
+        Substitute="Name.*#CRLF#":"","#CRLF#.*":""
+    """)
+    skin.execute('[!CommandMeasure MeasureGPUName "Run"]')
+    host.drain(timeout=5)
+    skin.update()
+    assert skin.measure("MeasureGPUName").string_value().strip() == "Test GPU 9000"
