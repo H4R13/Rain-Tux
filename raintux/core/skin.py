@@ -730,6 +730,11 @@ class Skin:
                     if cmd.startswith("["):
                         self._run_commands(split_commands(cmd), source)
                         continue
+                if cmd[1:8].lower() == "execute" and "[" in cmd:
+                    # The old !Execute [!A][!B]: everything from the first "[" is an action
+                    # (CommandHandler::ExecuteCommand); RainTux's own !Execute "[...]" too.
+                    self._run_commands(split_commands(cmd[cmd.index("["):]), source)
+                    continue
                 if cmd.startswith("!"):
                     # Like Rainmeter's CommandHandler: split first, then resolve [Section]
                     # variables per argument, so a value like "497.2 M" stays one argument.

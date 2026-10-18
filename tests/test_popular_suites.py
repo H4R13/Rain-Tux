@@ -302,6 +302,23 @@ def test_config_active_and_sys_color(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert type(skin.measure("MeasureBlur")).__name__ == "NoEffectPlugin"
 
 
+def test_old_execute_bang(tmp_path: Path) -> None:
+    """Simplicity Circles (Rainmeter 1.x era): !Execute [!SetVariable "playertxt" "closed"] [!Redraw]."""
+    skin, _ = make_skin(tmp_path, """
+        [Variables]
+        playertxt=open
+        b=0
+
+        [MeasureX]
+        Measure=Calc
+        Formula=1
+        IfAboveValue=0
+        IfAboveAction=!Execute [!SetVariable "playertxt" "closed"] [!SetVariable b 2]
+    """)
+    skin.update()
+    assert (skin.get_variable("playertxt"), skin.get_variable("b")) == ("closed", "2")
+
+
 @pytest.mark.parametrize("new_on_top", [True, False])
 @pytest.mark.parametrize("current", ["abcd", "dcba", "badc", "acbd", "dabc", "bcda"])
 def test_restack_plan_orders_a_layer(current: str, new_on_top: bool) -> None:
