@@ -118,6 +118,87 @@ def _swap_greediness(p: str) -> str:
     return "".join(out)
 
 
+def _group_end(p: str, start: int) -> int:
+    """Index just after the group opening at ``p[start] == "("`` (escapes and classes skipped)."""
+    depth, i, in_class = 0, start, False
+    while i < len(p):
+        c = p[i]
+        if c == "\\":
+            i += 2
+            continue
+        if in_class:
+            in_class = c != "]"
+        elif c == "[":
+            in_class = True
+            if p[i + 1:i + 2] == "^":
+                i += 1
+            if p[i + 1:i + 2] == "]":
+                i += 1
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    raise re.error("missing ), unterminated subpattern", p, start)
+
+
+def _top_level_bar(p: str) -> int:
+    """Index of the first ``|`` outside groups and classes, or -1."""
+    i, in_class, depth = 0, False, 0
+    while i < len(p):
+        c = p[i]
+        if c == "\\":
+            i += 2
+            continue
+        if in_class:
+            in_class = c != "]"
+        elif c == "[":
+            in_class = True
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif c == "|" and depth == 0:
+            return i
+        i += 1
+    return -1
+
+
+def _non_capturing(p: str) -> str:
+    return re.sub(r"(?<!\\)\((?!\?)|\(\?P?<(?![=!])[A-Za-z_]\w*>", "(?:", p)
+
+
+def _conditionals(p: str) -> str:
+    """PCRE's ``(?(?=X)yes|no)`` (a condition that is an assertion; Python only takes group
+    numbers there) as ``(?:(?=X)yes|(?!X)no)``. Rainmeter skins use it to match an item only if
+    there is one more: ``(?(?=.*"name":).*"name": "(.*)")``, repeated."""
+    out: list[str] = []
+    i = 0
+    while (j := p.find("(?(?", i)) >= 0:
+        if (len(p[:j]) - len(p[:j].rstrip("\\"))) % 2:  # an escaped "("
+            out.append(p[i:j + 1])
+            i = j + 1
+            continue
+        cond_end = _group_end(p, j + 2)
+        cond = p[j + 2:cond_end]  # "(?=X)"
+        m = re.match(r"\(\?(<?)([=!])", cond)
+        if not m:
+            out.append(p[i:j + 1])
+            i = j + 1
+            continue
+        end = _group_end(p, j)
+        body = p[cond_end:end - 1]
+        bar = _top_level_bar(body)
+        yes, no = (body, "") if bar < 0 else (body[:bar], body[bar + 1:])
+        negated = "(?" + m.group(1) + ("!" if m.group(2) == "=" else "=") + _non_capturing(cond[m.end():])
+        out.append(p[i:j] + "(?:" + cond + _conditionals(yes) + "|" + negated + _conditionals(no) + ")")
+        i = end
+    out.append(p[i:])
+    return "".join(out)
+
+
 @functools.lru_cache(maxsize=512)
 def compile_pcre(pattern: str) -> re.Pattern[str]:
     """Compile a Rainmeter (PCRE) regular expression."""
@@ -135,6 +216,7 @@ def compile_pcre(pattern: str) -> re.Pattern[str]:
                 elif ch.lower() in _FLAGS:
                     flags |= _FLAGS[ch.lower()]
     p = re.sub(r"\(\?<(?=[A-Za-z_])", "(?P<", p)
+    p = _conditionals(p)
     p = _fix_classes(p)
     if ungreedy:
         p = _swap_greediness(p)

@@ -252,6 +252,19 @@ def test_formula_errors_like_rainmeter(tmp_path: Path, caplog: pytest.LogCapture
     assert skin.get_variable("Fives") == "0"  # 5 is neither true nor false
 
 
+def test_pcre_conditional_on_an_assertion() -> None:
+    """Sonder's ISS crew list repeats (?(?=.*"name":).*"name": "(.*)") 16 times: match one more
+    name if there is one. Python's re only takes a group number as the condition."""
+    from raintux.core.pcre import compile_pcre
+
+    item = '(?(?=.*"name":).*"name": "(.*)")'
+    m = compile_pcre("(?siU)" + item * 3).search('[{"name": "Ann", "x": 1}, {"name": "Bob"}]')
+    assert m is not None and m.groups() == ("Ann", "Bob", None)
+    assert compile_pcre(r"^(?(?!a)b|c)$").match("c") is None
+    assert compile_pcre(r"^(?(?!a)b|c)$").match("b") is not None
+    assert compile_pcre(r"(?(?=(x))x|y)").groups == 1  # the negated copy captures nothing
+
+
 @pytest.mark.parametrize("new_on_top", [True, False])
 @pytest.mark.parametrize("current", ["abcd", "dcba", "badc", "acbd", "dabc", "bcda"])
 def test_restack_plan_orders_a_layer(current: str, new_on_top: bool) -> None:
