@@ -89,6 +89,10 @@ _PLUGINS: dict[str, str] = {
     "drag&drop": "dragdrop:DragDropMeasure",
     "mouse": "mouse:MouseMeasure",
     "itunesplugin": "media:NowPlayingPlugin",
+    # Windows player plugins: the MPRIS player instead.
+    "webnowplaying": "media:WebNowPlayingPlugin",
+    "gpmdpplugin": "media:GpmdpPlugin",
+    "spotifyplugin": "media:SpotifyPlugin",
     "perfmon": "",
     "resmon": "",
     "windowmessageplugin": "",

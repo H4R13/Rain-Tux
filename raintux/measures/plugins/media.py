@@ -301,6 +301,90 @@ class NowPlayingPlugin(Measure):
             subprocess.Popen([exe], start_new_session=True)
 
 
+class WebNowPlayingPlugin(NowPlayingPlugin):
+    """WebNowPlaying / GPMDPPlugin (players in a browser or Google Play Music Desktop on Windows) read
+    the MPRIS player here. ``PlayerType`` / ``PlayerInfo`` name the value as NowPlaying does, plus
+    ``Player`` (the player's name); Repeat is 0 off, 1 one track, 2 all; ``DefaultPath`` is the cover
+    shown without one. Their bangs ``Repeat`` / ``Shuffle`` cycle; thumbs and rating have no MPRIS
+    equivalent."""
+
+    type_option = "playertype"
+
+    def read_measure(self) -> None:
+        super().read_measure()
+        self.ptype = self.get(self.type_option, self.get("playertype", "Title")).strip().lower()
+        if self.ptype in ("progress", "volume") and not self.has("maxvalue"):
+            self.max_value = 100.0
+        if not self.default_cover:
+            self.default_cover = self.get("defaultpath")
+
+    def update_value(self) -> None:
+        if self.ptype not in ("repeat", "player"):
+            super().update_value()
+            return
+        mp = Mpris.get()
+        name = self.bus_name = self._player()
+        self._raw_number, self.string = 0.0, ("" if self.ptype == "player" else None)
+        if mp is None or name is None:
+            return
+        if self.ptype == "repeat":
+            self._raw_number = {"Track": 1.0, "Playlist": 2.0}.get(mp.prop(name, "LoopStatus") or "", 0.0)
+        else:
+            self.string = name[len(MPRIS_PREFIX):].split(".")[0].capitalize()
+
+    def command(self, args: str) -> None:
+        w = args.strip().split(" ", 1)[0].lower()
+        mp, name = Mpris.get(), self._player()
+        if w in ("repeat", "shuffle") and mp is not None and name is not None:
+            try:
+                if w == "repeat":  # off -> all -> one -> off, as WebNowPlaying cycles
+                    nxt = {"None": "Playlist", "Playlist": "Track"}.get(mp.prop(name, "LoopStatus") or "None", "None")
+                    mp.set_prop(name, "LoopStatus", mp.GLib.Variant("s", nxt))
+                else:
+                    mp.set_prop(name, "Shuffle", mp.GLib.Variant("b", not mp.prop(name, "Shuffle")))
+            except Exception:
+                log.exception("[%s] %s failed", self.name, args)
+        elif w in ("togglethumbsup", "togglethumbsdown", "setrating"):
+            log.debug("[%s] %s: MPRIS players take no ratings", self.name, w)
+        else:
+            super().command(args)
+
+
+class GpmdpPlugin(WebNowPlayingPlugin):
+    type_option = "playerinfo"
+
+
+class SpotifyPlugin(NowPlayingPlugin):
+    """SpotifyPlugin reads the Spotify app (any MPRIS player when Spotify isn't running).
+    ``Type`` = TrackName, ArtistName, AlbumName, AlbumArt, Length, Position (``mm:ss``), Progress
+    (0 to 1), Playing (1 / 0), Volume, Repeat, Shuffle, TrackURI."""
+
+    _TYPES = {"trackname": "title", "artistname": "artist", "albumname": "album", "albumart": "cover",
+              "length": "duration", "position": "position", "progress": "progress", "playing": "state",
+              "volume": "volume", "repeat": "repeat", "shuffle": "shuffle", "trackuri": "file",
+              "albumuri": "album", "artisturi": "artist"}
+
+    def read_measure(self) -> None:
+        super().read_measure()
+        kind = self.get("type", "TrackName").strip().lower()
+        self.ptype = self._TYPES.get(kind, kind)
+        self.player_pref = self.player_pref or "spotify"
+        if self.ptype == "progress" and not self.has("maxvalue"):
+            self.max_value = 1.0
+        if not self.default_cover:
+            self.default_cover = self.get("defaultpath")
+
+    def update_value(self) -> None:
+        super().update_value()
+        if self.ptype == "progress":
+            self._raw_number /= 100.0
+        elif self.ptype == "state":
+            self._raw_number = 1.0 if self._raw_number == 1.0 else 0.0
+        elif self.ptype in ("duration", "position"):
+            m, s = divmod(max(0, int(self._raw_number)), 60)
+            self.string = f"{m:02d}:{s:02d}"
+
+
 # --------------------------------------------------------------------------- volume
 def _run(argv: list[str]) -> str:
     return subprocess.run(argv, capture_output=True, text=True, timeout=3, check=False).stdout
