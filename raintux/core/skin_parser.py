@@ -18,7 +18,6 @@ from raintux.compat.ini_normalizer import read_ini_normalized
 
 log = logging.getLogger(__name__)
 
-_VAR_PATTERN = re.compile(r"#([^#\s]+)#")
 _SECTION = re.compile(r"^\s*\[([^\]]+)\]\s*$")
 _MAX_INCLUDE_DEPTH = 16
 
@@ -82,6 +81,31 @@ def variable_table(
     return merged
 
 
+def _expand_once(text: str, table: dict[str, str]) -> str:
+    """One pass of Rainmeter's ``ConfigParser::ReplaceVariables``: the text between a ``#`` and the
+    next one is a name (spaces allowed, ``#Recycle Bin#``); when it is no variable, its closing ``#``
+    may open the next one."""
+    out: list[str] = []
+    i = start = 0
+    while (start := text.find("#", start)) >= 0:
+        end = text.find("#", start + 1)
+        if end < 0:
+            break
+        name = text[start + 1:end]
+        if len(name) >= 2 and name[0] == "*" and name[-1] == "*":
+            out.append(text[i:start] + "\0" + name[1:-1] + "\0")  # #*NAME*# -> a literal #NAME#
+            i = start = end + 1
+            continue
+        value = table.get(name.upper())
+        if value is None:
+            start = end
+            continue
+        out.append(text[i:start] + value)
+        i = start = end + 1
+    out.append(text[i:])
+    return "".join(out)
+
+
 def expand_variables(text: str, table: dict[str, str]) -> str:
     """Expand ``#NAME#`` placeholders from ``table`` up to a fixed recursion depth.
 
@@ -89,16 +113,9 @@ def expand_variables(text: str, table: dict[str, str]) -> str:
     """
     if not text or "#" not in text:
         return text
-
-    def repl(match: re.Match[str]) -> str:
-        key = match.group(1).strip()
-        if key.startswith("*") and key.endswith("*") and len(key) > 2:
-            return "\0" + key[1:-1] + "\0"
-        return table.get(key.upper(), match.group(0))
-
     out = text
     for _ in range(16):
-        next_out = _VAR_PATTERN.sub(repl, out)
+        next_out = _expand_once(out, table)
         if next_out == out:
             break
         out = next_out

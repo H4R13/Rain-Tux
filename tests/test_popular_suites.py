@@ -172,3 +172,23 @@ def test_spotify_plugin_types(tmp_path: Path, player: FakeMpris) -> None:
     assert skin.measure("MeasureProgress").value == pytest.approx(0.25)
     assert skin.measure("MeasurePlaying").value == 0  # paused is "not playing"
     assert skin.measure("MeasureCover").string_value() == "/tmp/cover.png"
+
+
+def test_variable_names_with_spaces(tmp_path: Path) -> None:
+    """Mond's language files define ``Recycle Bin=Recycle Bin`` and its skin shows ``#Recycle Bin#``."""
+    skin, _ = make_skin(tmp_path, """
+        [Variables]
+        Recycle Bin=Papierkorb
+        Files=Dateien
+
+        [MeterText]
+        Meter=String
+        Text="#Recycle Bin# - #Files# 3"
+
+        [MeterHash]
+        Meter=String
+        Text=Track #1 of #Files#, #*Files*#
+    """)
+    assert skin.meter("MeterText").text == "Papierkorb - Dateien 3"
+    # "#1 of #" names no variable, so its closing "#" starts "#Files#" (Rainmeter's scan).
+    assert skin.meter("MeterHash").text == "Track #1 of Dateien, #Files#"
