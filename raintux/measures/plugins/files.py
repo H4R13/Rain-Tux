@@ -147,22 +147,43 @@ class RecycleManagerPlugin(Measure):
 
     def command(self, args: str) -> None:
         cmd = args.strip().lower()
-        if cmd in ("emptybin", "emptybinsilent"):
-            if shutil.which("gio"):
-                subprocess.Popen(["gio", "trash", "--empty"], start_new_session=True)
-            else:
-                for sub in ("files", "info"):
-                    d = trash_dir() / sub
-                    if d.is_dir():
-                        for e in d.iterdir():
-                            shutil.rmtree(e, ignore_errors=True) if e.is_dir() and not e.is_symlink() else e.unlink(missing_ok=True)
-            self._tick = 0
+        if cmd == "emptybinsilent":
+            self._empty()
+        elif cmd == "emptybin":
+            # Like SHEmptyRecycleBin without SHERB_NOCONFIRMATION: ask before deleting for good.
+            files = trash_dir() / "files"
+            count = sum(1 for _ in files.iterdir()) if files.is_dir() else 0
+            if count == 0:
+                return
+            confirm = getattr(self.skin.host, "confirm", None)
+            if confirm is None:
+                log.warning("[%s] EmptyBin needs a confirmation dialog; the trash was left as it is", self.name)
+                return
+            what = "this item" if count == 1 else f"these {count} items"
+            confirm(self.skin, "Empty Trash", f"Are you sure you want to permanently delete {what}?", "Empty Trash",
+                    lambda ok: self._empty() if ok and not self.skin.closed else None)
         elif cmd == "openbin":
             from gi.repository import Gio
 
             Gio.AppInfo.launch_default_for_uri("trash:///", None)
         else:
             super().command(args)
+
+    def _empty(self) -> None:
+        empty_trash()
+        self._tick = 0
+
+
+def empty_trash() -> None:
+    """Delete everything in the desktop trash, for good."""
+    if shutil.which("gio"):
+        subprocess.Popen(["gio", "trash", "--empty"], start_new_session=True)
+        return
+    for sub in ("files", "info"):
+        d = trash_dir() / sub
+        if d.is_dir():
+            for e in d.iterdir():
+                shutil.rmtree(e, ignore_errors=True) if e.is_dir() and not e.is_symlink() else e.unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------------- FileView

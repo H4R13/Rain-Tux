@@ -110,6 +110,7 @@ class SkinHost(Protocol):
     def set_pointer(self, skin: Skin, cursor: str | None, tooltip: str | None) -> None: ...
     def ask_text(self, skin: Skin, rect: tuple[float, float, float, float], style: dict[str, Any], default: str,
                  password: bool, callback: Callable[[str | None], None]) -> None: ...
+    def confirm(self, skin: Skin, title: str, message: str, action: str, callback: Callable[[bool], None]) -> None: ...
 
 
 class NullHost:
@@ -124,6 +125,7 @@ class NullHost:
         self.skins: dict[str, Skin] = {}
         self.pointer: tuple[str | None, str | None] = (None, None)
         self.prompts: list[tuple[Any, str, Callable[[str | None], None]]] = []
+        self.confirms: list[tuple[str, str, Callable[[bool], None]]] = []
         self._soon: list[Callable[[], None]] = []
         import threading
 
@@ -172,6 +174,10 @@ class NullHost:
     def ask_text(self, skin: Skin, rect: tuple[float, float, float, float], style: dict[str, Any], default: str,
                  password: bool, callback: Callable[[str | None], None]) -> None:
         self.prompts.append((rect, default, callback))
+
+    def confirm(self, skin: Skin, title: str, message: str, action: str, callback: Callable[[bool], None]) -> None:
+        """Questions are recorded, never answered: a test answers with ``confirms[i][2](True)``."""
+        self.confirms.append((title, message, callback))
 
     def run_command(self, skin: Skin, command: str) -> None:
         self.commands.append(" ".join(split_args(command)))

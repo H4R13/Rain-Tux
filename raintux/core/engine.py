@@ -624,6 +624,20 @@ class RainTuxEngine:
 
         ask_text(self.app, skin, rect, style, default, password, callback)
 
+    def confirm(self, skin: Skin, title: str, message: str, action: str, callback: Callable[[bool], None]) -> None:
+        """Ask before something that cannot be undone (EmptyBin); Cancel is the default answer."""
+        dialog = Gtk.AlertDialog(message=title, detail=message, buttons=["Cancel", action], cancel_button=0,
+                                 default_button=0, modal=True)
+
+        def done(d: Gtk.AlertDialog, res: Gio.AsyncResult) -> None:
+            try:
+                ok = d.choose_finish(res) == 1
+            except GLib.Error:
+                ok = False
+            callback(ok)
+
+        dialog.choose(None, None, done)
+
     def run_command(self, skin: Skin, command: str) -> None:
         """Run a non-bang action: URLs and files open with the default app, programs start detached."""
         args = split_args(command)
