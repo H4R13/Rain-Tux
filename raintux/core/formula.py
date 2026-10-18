@@ -10,6 +10,7 @@ recursive-descent parser, so skins cannot run Python through formulas.
 
 from __future__ import annotations
 
+import functools
 import math
 import random
 import re
@@ -169,11 +170,15 @@ def _apply(op: str, a: float, b: float) -> float:
     raise FormulaError(f"unknown operator {op}")
 
 
+# A parsed formula: ("n", value) | ("v", name) | ("u", op, node) | ("b", op, left, right)
+# | ("t", cond, then, else) | ("f", fn, args). Parsed once per text, evaluated each update.
+Node = tuple
+
+
 class _Parser:
-    def __init__(self, tokens: list[tuple[str, str]], resolve: Resolver | None) -> None:
+    def __init__(self, tokens: list[tuple[str, str]]) -> None:
         self.t = tokens
         self.i = 0
-        self.resolve = resolve
 
     def peek(self) -> tuple[str, str] | None:
         return self.t[self.i] if self.i < len(self.t) else None
@@ -187,7 +192,7 @@ class _Parser:
         self.i += 1
         return tok
 
-    def expr(self) -> float:
+    def expr(self) -> Node:
         cond = self.binary(0)
         tok = self.peek()
         if tok and tok[1] == "?":
@@ -195,10 +200,10 @@ class _Parser:
             a = self.expr()
             self.take(":")
             b = self.expr()
-            return a if cond else b
+            return ("t", cond, a, b)
         return cond
 
-    def binary(self, min_prec: int) -> float:
+    def binary(self, min_prec: int) -> Node:
         left = self.unary()
         while True:
             tok = self.peek()
@@ -208,26 +213,20 @@ class _Parser:
             self.take()
             prec = _BINARY[op]
             right = self.binary(prec if op == "**" else prec + 1)
-            left = _apply(op, left, right)
+            left = ("b", op, left, right)
 
-    def unary(self) -> float:
+    def unary(self) -> Node:
         tok = self.peek()
         if tok and tok[0] == "op" and tok[1] in ("-", "+", "!", "~"):
             self.take()
             v = self.binary(_UNARY_PREC)
-            if tok[1] == "-":
-                return -v
-            if tok[1] == "!":
-                return float(not v)
-            if tok[1] == "~":
-                return float(~int(v))
-            return v
+            return v if tok[1] == "+" else ("u", tok[1], v)
         return self.primary()
 
-    def primary(self) -> float:
+    def primary(self) -> Node:
         kind, text = self.take()
         if kind == "num":
-            return _num(text)
+            return ("n", _num(text))
         if kind == "op" and text == "(":
             v = self.expr()
             self.take(")")
@@ -237,7 +236,7 @@ class _Parser:
             nxt = self.peek()
             if low in _FUNCS and nxt and nxt[1] == "(":
                 self.take("(")
-                args: list[float] = []
+                args: list[Node] = []
                 if self.peek() and self.peek()[1] != ")":  # type: ignore[index]
                     args.append(self.expr())
                     while self.peek() and self.peek()[1] == ",":  # type: ignore[index]
@@ -247,27 +246,55 @@ class _Parser:
                 lo, hi, fn = _FUNCS[low]
                 if not lo <= len(args) <= hi:
                     raise FormulaError(f"{low}() takes {lo}-{hi} arguments")
-                return float(fn(*args))
+                return ("f", fn, tuple(args))
             if low in _CONSTS:
-                return _CONSTS[low]
-            if self.resolve is not None:
-                v = self.resolve(text)
-                if v is not None:
-                    return float(v)
-            raise FormulaError(f"unknown identifier {text!r}")
+                return ("n", _CONSTS[low])
+            return ("v", text)
         raise FormulaError(f"unexpected {text!r}")
+
+
+def _eval(node: Node, resolve: Resolver | None) -> float:
+    kind = node[0]
+    if kind == "n":
+        return node[1]
+    if kind == "b":
+        return _apply(node[1], _eval(node[2], resolve), _eval(node[3], resolve))
+    if kind == "v":
+        if resolve is not None:
+            v = resolve(node[1])
+            if v is not None:
+                return float(v)
+        raise FormulaError(f"unknown identifier {node[1]!r}")
+    if kind == "u":
+        v = _eval(node[2], resolve)
+        op = node[1]
+        if op == "-":
+            return -v
+        if op == "!":
+            return float(not v)
+        return float(~int(v))
+    if kind == "t":
+        # Both branches are worked out, as before: an unknown name in either is an error.
+        cond, a, b = _eval(node[1], resolve), _eval(node[2], resolve), _eval(node[3], resolve)
+        return a if cond else b
+    return float(node[1](*(_eval(a, resolve) for a in node[2])))
+
+
+@functools.lru_cache(maxsize=8192)
+def _compile(src: str) -> Node:
+    tokens = _tokenize(src)
+    if not tokens:
+        raise FormulaError("empty formula")
+    p = _Parser(tokens)
+    node = p.expr()
+    if p.peek() is not None:
+        raise FormulaError(f"trailing input {p.peek()[1]!r} in {src!r}")  # type: ignore[index]
+    return node
 
 
 def evaluate(src: str, resolve: Resolver | None = None) -> float:
     """Evaluate ``src``; raise :class:`FormulaError` when it does not parse."""
-    tokens = _tokenize(src)
-    if not tokens:
-        raise FormulaError("empty formula")
-    p = _Parser(tokens, resolve)
-    v = p.expr()
-    if p.peek() is not None:
-        raise FormulaError(f"trailing input {p.peek()[1]!r} in {src!r}")  # type: ignore[index]
-    return v
+    return _eval(_compile(src), resolve)
 
 
 def parse_number(value: str, default: float = 0.0, resolve: Resolver | None = None) -> float:

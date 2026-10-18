@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import math
 from typing import TYPE_CHECKING, Any
@@ -57,6 +58,13 @@ def parse_numbers(value: str, count: int, default: float = 0.0, resolve: Any = N
 
 def split_top_level(text: str, sep: str) -> list[str]:
     """Split on ``sep`` outside parentheses (``(1,2),3`` keeps the formula together)."""
+    if "(" not in text:  # the usual case, and options are split on every update
+        return [p.strip() for p in text.split(sep)]
+    return list(_split_nested(text, sep))
+
+
+@functools.lru_cache(maxsize=4096)
+def _split_nested(text: str, sep: str) -> tuple[str, ...]:
     out, depth, cur = [], 0, []
     for ch in text:
         if ch == "(":
@@ -69,7 +77,7 @@ def split_top_level(text: str, sep: str) -> list[str]:
         else:
             cur.append(ch)
     out.append("".join(cur).strip())
-    return out
+    return tuple(out)
 
 
 def linear_gradient(cr: Any, x: float, y: float, w: float, h: float, angle_deg: float, stops: list[tuple[float, Color]]) -> Any:

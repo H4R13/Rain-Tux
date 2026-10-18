@@ -501,7 +501,7 @@ class _AudioCapture:
         self.rms = [0.0, 0.0]
         self.peak = [0.0, 0.0]
         self.band_values: list[float] = [0.0] * bands
-        self.fft_values: list[float] = []
+        self.fft_values: Any = []  # the latest spectrum (a numpy array once there is one)
         self.status = 0
         self.proc: subprocess.Popen[bytes] | None = None
         self.stop = threading.Event()
@@ -534,6 +534,9 @@ class _AudioCapture:
         except ImportError:
             np = None  # type: ignore[assignment]
         buf = []
+        # Worked out once: the window and each band's slice of the spectrum.
+        window = np.hanning(self.fft_size).astype(np.float32) if np is not None and self.fft_size else None
+        bands = self._band_slices(np) if window is not None else []
         while not self.stop.is_set():
             data = self.proc.stdout.read(self.CHUNK * 4) if self.proc.stdout else b""
             if not data:
@@ -541,16 +544,16 @@ class _AudioCapture:
             n = len(data) // 4
             if np is not None:
                 frames = np.frombuffer(data[: n * 4], dtype="<i2").reshape(-1, 2).astype(np.float32) / 32768.0
-                self.rms = [float(np.sqrt(np.mean(frames[:, c] ** 2))) for c in (0, 1)]
-                self.peak = [float(np.max(np.abs(frames[:, c]))) for c in (0, 1)]
-                if self.fft_size:
+                self.rms = np.sqrt(np.mean(frames * frames, axis=0)).tolist()
+                self.peak = np.max(np.abs(frames), axis=0).tolist()
+                if window is not None:
                     buf.append(frames.mean(axis=1))
                     joined = np.concatenate(buf)
                     if len(joined) >= self.fft_size:
-                        seg = joined[-self.fft_size:] * np.hanning(self.fft_size)
-                        mag = np.abs(np.fft.rfft(seg)) / (self.fft_size / 2)
-                        self.fft_values = mag.tolist()
-                        self._bands(mag, np)
+                        mag = np.abs(np.fft.rfft(joined[-self.fft_size:] * window)) / (self.fft_size / 2)
+                        self.fft_values = mag
+                        if bands:
+                            self.band_values = [float(mag[a:b].max()) if b > a else 0.0 for a, b in bands]
                         buf = [joined[-self.fft_size // 2:]]
             else:
                 samples = struct.unpack(f"<{n * 2}h", data[: n * 4])
@@ -560,16 +563,13 @@ class _AudioCapture:
                     self.peak[c] = max((abs(s) for s in ch), default=0) / 32768.0
         self.status = 0
 
-    def _bands(self, mag: Any, np: Any) -> None:
+    def _band_slices(self, np: Any) -> list[tuple[int, int]]:
+        """Each band's [start, end) bins of the spectrum: bands are spaced logarithmically."""
         if self.bands <= 0:
-            return
+            return []
         freqs = np.fft.rfftfreq(self.fft_size, 1.0 / self.RATE)
-        edges = np.geomspace(max(1.0, self.fmin), self.fmax, self.bands + 1)
-        vals = []
-        for i in range(self.bands):
-            sel = mag[(freqs >= edges[i]) & (freqs < edges[i + 1])]
-            vals.append(float(sel.max()) if sel.size else 0.0)
-        self.band_values = vals
+        edges = np.searchsorted(freqs, np.geomspace(max(1.0, self.fmin), self.fmax, self.bands + 1))
+        return [(int(edges[i]), int(edges[i + 1])) for i in range(self.bands)]
 
     def close(self) -> None:
         self.stop.set()
@@ -641,7 +641,7 @@ class AudioLevelPlugin(Measure):
             raw = self._db(vals[self.band_idx]) if self.band_idx < len(vals) else 0.0
         elif k == "fft":
             vals = cap.fft_values
-            raw = self._db(vals[self.fft_idx]) if self.fft_idx < len(vals) else 0.0
+            raw = self._db(float(vals[self.fft_idx])) if self.fft_idx < len(vals) else 0.0
         else:
             raw = 0.0
         # Simple attack/decay smoothing per skin update.

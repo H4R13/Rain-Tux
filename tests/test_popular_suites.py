@@ -272,6 +272,19 @@ def test_any_font_weight_draws(tmp_path: Path) -> None:
     assert (int(pango_weight(650)), int(pango_weight(1)), int(pango_weight(999))) == (700, 100, 1000)
 
 
+def test_disk_partitions_are_read_once_per_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ModernGadgets' DisksMeter asked psutil for every mount (pathconf on each) per measure per update."""
+    from raintux.measures import disk_measure as dm
+
+    calls: list[bool] = []
+    monkeypatch.setattr(dm.psutil, "disk_partitions", lambda all=False: calls.append(all) or [])
+    monkeypatch.setattr(dm, "_PARTITIONS", {})
+    for _ in range(50):
+        dm.partitions(True)
+        dm.partitions()
+    assert calls == [True, False]
+
+
 def test_run_command_answers_wmic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """SysDash shows the GPU name from ``wmic path win32_VideoController get name``."""
     from raintux.compat import windows

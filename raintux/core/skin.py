@@ -278,6 +278,7 @@ class Skin:
         self._laid_out = False  # until then [Meter:X] walks the relative chain (_layout_chain)
         self._vars_version = 0  # bumped on every variable change; keys the #Variable# table cache
         self._var_cache: tuple[tuple[int, int, int, int, int], dict[str, str]] | None = None
+        self._expanded: tuple[dict[str, str] | None, dict[str, str]] = (None, {})  # table -> {text: expanded}
         self.on_size_changed: Callable[[int, int], None] | None = None
         self._mouse_ctx: tuple[float, float, Any] | None = None
         self.zoom = 1.0
@@ -415,7 +416,15 @@ class Skin:
         """Expand ``#Variables#``, character references and (optionally) ``[Section]`` variables."""
         if not text:
             return text
-        out = expand_variables(expand_environment(text), self._variable_table())
+        table = self._variable_table()
+        if self._expanded[0] is not table:  # variables changed: earlier expansions are stale
+            self._expanded = (table, {})
+        cache = self._expanded[1]
+        out = cache.get(text)
+        if out is None:
+            out = expand_variables(expand_environment(text), table)
+            if len(cache) < 50000:
+                cache[text] = out
         if "[" in out:
             out = _CHAR_REF.sub(_char_ref, out)
             if section_vars:

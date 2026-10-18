@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import psutil
@@ -13,6 +14,19 @@ from raintux.measures.base_measure import Measure
 _DRIVE_MAP: dict[str, str] = {}  # the [drives] table of config.toml: "D" -> "/home"
 _MNT = Path("/mnt")
 _is_mount = os.path.ismount
+_PARTITIONS: dict[bool, tuple[float, list]] = {}  # all -> (when, psutil.disk_partitions(all))
+_PARTITIONS_TTL = 5.0
+
+
+def partitions(all_: bool = False) -> list:
+    """``psutil.disk_partitions``, kept for a few seconds: it calls pathconf on every mount, and
+    every drive measure of a skin asks on each update (ModernGadgets' DisksMeter has dozens)."""
+    now = time.monotonic()
+    when, parts = _PARTITIONS.get(all_, (-_PARTITIONS_TTL, []))
+    if now - when >= _PARTITIONS_TTL:
+        parts = psutil.disk_partitions(all=all_)
+        _PARTITIONS[all_] = (now, parts)
+    return parts
 
 
 def set_drive_map(mapping: dict[str, str]) -> None:
@@ -43,7 +57,7 @@ def map_drive(drive: str) -> str:
             return str(own)
         extra = sorted(
             p.mountpoint
-            for p in psutil.disk_partitions(all=False)
+            for p in partitions()
             if p.mountpoint.startswith(("/media", "/mnt", "/run/media"))
             and not p.mountpoint.startswith("/mnt/wsl")
             and not (len(p.mountpoint) == 6 and p.mountpoint.startswith("/mnt/"))  # /mnt/x: a letter's own
@@ -89,7 +103,7 @@ class DiskMeasure(Measure):
         if not self.path:
             return "Removed" if self.type_mode else ""
         part = next(
-            (p for p in sorted(psutil.disk_partitions(all=True), key=lambda p: -len(p.mountpoint))
+            (p for p in sorted(partitions(True), key=lambda p: -len(p.mountpoint))
              if self.path.startswith(p.mountpoint)),
             None,
         )
