@@ -657,16 +657,15 @@ class RainTuxEngine:
             if len(args) > 1:
                 self.execute_global(" ".join(_quote(a) for a in args[1:]))
             return
+        from raintux.compat.shell import translate
+
+        action = translate(args, skin.path)
+        if action is not None:
+            self._run_windows_action(skin, action, command)
+            return
         try:
             if re.match(r"^[a-z][a-z0-9+.\-]*:(//)?", low) and not re.match(r"^[a-z]:[\\/]", low):
                 Gio.AppInfo.launch_default_for_uri(prog, None)
-                return
-            if low in ("explorer", "explorer.exe"):
-                target = skin.path(args[1]) if len(args) > 1 else Path.home()
-                Gio.AppInfo.launch_default_for_uri(target.as_uri(), None)
-                return
-            if low in ("notepad", "notepad.exe") and len(args) > 1:
-                self.open_in_editor(skin.path(args[1]))
                 return
             path = skin.path(prog)
             if path.exists() and not (path.is_file() and os.access(path, os.X_OK)):
@@ -678,6 +677,37 @@ class RainTuxEngine:
                 return
             subprocess.Popen([exe, *args[1:]], cwd=str(skin.root), start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            log.exception("[%s] command failed: %s", skin.config, command)
+
+    def _run_windows_action(self, skin: Skin, action: Any, command: str) -> None:
+        """Run what a Windows click target means here (raintux.compat.shell)."""
+        from raintux.compat.shell import ROLES
+
+        try:
+            if action.note:
+                log.info("[%s] %s: %s", skin.config, command, action.note)
+            elif action.uri:
+                try:
+                    Gio.AppInfo.launch_default_for_uri(action.uri, None)
+                except GLib.Error:  # computer:/// and network:/// need GVfs: the home folder then
+                    Gio.AppInfo.launch_default_for_uri(Path.home().as_uri(), None)
+            elif action.role == "@browser":
+                app = Gio.AppInfo.get_default_for_uri_scheme("https")
+                urls = [a for a in action.argv if re.match(r"^https?://", a)]
+                if app is not None:
+                    app.launch_uris(urls, None) if urls else app.launch([], None)
+            elif action.role == "@editor" and action.argv:
+                self.open_in_editor(skin.path(action.argv[0]))
+            elif action.role in ROLES:
+                exe = next((e for e in map(shutil.which, ROLES[action.role]) if e), None)
+                if exe is None:
+                    log.info("[%s] %s: no %s app found", skin.config, command, action.role[1:])
+                else:
+                    subprocess.Popen([exe], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif action.argv:
+                subprocess.Popen(action.argv, cwd=str(skin.root), start_new_session=True,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             log.exception("[%s] command failed: %s", skin.config, command)
 
