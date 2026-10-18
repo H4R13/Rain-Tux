@@ -265,6 +265,43 @@ def test_pcre_conditional_on_an_assertion() -> None:
     assert compile_pcre(r"(?(?=(x))x|y)").groups == 1  # the negated copy captures nothing
 
 
+def test_config_active_and_sys_color(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Monterey's settings ask ConfigActive which widgets are loaded; ModernGadgets' LoadSkin.lua
+    calls [&Measure:IsActive(Config)]; Monstercat colours itself with SysColor's DWM_COLOR."""
+    from raintux.compat import windows
+
+    monkeypatch.setattr(windows, "accent_rgb", lambda: (10, 20, 30))
+    skin, host = make_skin(tmp_path, r"""
+        [MeasureMe]
+        Measure=Plugin
+        Plugin=ConfigActive
+        ConfigName=Test
+
+        [MeasureOther]
+        Measure=Plugin
+        Plugin=ConfigActive.dll
+        ConfigName=Suite\Clock
+
+        [MeasureAccent]
+        Measure=Plugin
+        Plugin=SysColor
+        ColorType=DWM_COLOR
+        DisplayType=RGB
+
+        [MeasureBlur]
+        Measure=Plugin
+        Plugin=FrostedGlass
+        Type=Blur
+    """)
+    skin.update()
+    assert (skin.measure("MeasureMe").value, skin.measure("MeasureOther").value) == (1, -1)
+    assert skin.resolve("[&MeasureMe:IsActive(Test)] [&MeasureMe:ConfigVariantName('Test')]",
+                        section_vars=True) == "1 Test.ini"
+    assert skin.resolve("[&MeasureMe:IsActive(Suite\\Clock)]", section_vars=True) == "-1"
+    assert skin.measure("MeasureAccent").string_value() == "10,20,30"
+    assert type(skin.measure("MeasureBlur")).__name__ == "NoEffectPlugin"
+
+
 @pytest.mark.parametrize("new_on_top", [True, False])
 @pytest.mark.parametrize("current", ["abcd", "dcba", "badc", "acbd", "dabc", "bcda"])
 def test_restack_plan_orders_a_layer(current: str, new_on_top: bool) -> None:
