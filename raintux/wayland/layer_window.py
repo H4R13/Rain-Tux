@@ -131,6 +131,7 @@ class SkinWindow(Gtk.ApplicationWindow):
         self._input_rects: list[tuple[int, int, int, int]] | None = None
         self.zoom = 1.0
         self._logical = (1, 1)
+        self._layer_name = ""
         if self.layer:
             _LayerShell.init_for_window(self)
             _LayerShell.set_namespace(self, "raintux")
@@ -146,7 +147,13 @@ class SkinWindow(Gtk.ApplicationWindow):
     def apply_state(self) -> None:
         st = self.skin.state
         if self.layer:
-            _LayerShell.set_layer(self, getattr(_LayerShell.Layer, layer_for_zpos(st.z)))
+            layer = layer_for_zpos(st.z)
+            moved = layer != self._layer_name and self.get_mapped()
+            self._layer_name = layer
+            _LayerShell.set_layer(self, getattr(_LayerShell.Layer, layer))
+            if moved:  # mapped again, it joins its new layer's stacking (see core/stacking.py)
+                self.set_visible(False)
+                self.set_visible(True)
         self.move_to(st.x, st.y)
         self.set_opacity(max(0.0, min(1.0, st.alpha / 255.0)))
         self.update_input_region(force=True)

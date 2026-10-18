@@ -64,6 +64,14 @@ def detect_compositor() -> CompositorKind:
     return CompositorKind.UNKNOWN
 
 
+def new_layer_surfaces_on_top() -> bool:
+    """Whether a newly mapped layer-shell surface goes on top of its layer (most compositors) or
+    to the bottom (Sway 1.9, measured); see :mod:`raintux.core.stacking`."""
+    desktops = {d.lower() for d in _xdg_desktops()}
+    return not (os.environ.get("SWAYSOCK") or "sway" in desktops
+                or (os.environ.get("DESKTOP_SESSION") or "").lower() == "sway")
+
+
 def registry_has_layer_shell(timeout_s: float = 1.0) -> bool:
     """
     Best-effort probe for ``zwlr_layer_shell_v1`` using ``wayland-info`` when installed.

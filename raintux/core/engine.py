@@ -21,11 +21,12 @@ from gi.repository import Gdk, Gio, GLib, Gtk
 from raintux.core.bangs import split_args, split_commands
 from raintux.core.config import RainTuxConfig, default_skins_roots, load_config
 from raintux.core.formula import parse_number
-from raintux.core.position import Rect, anchor_offset, apply_skin_defaults, authored_position
+from raintux.core.position import Rect, anchor_offset, apply_skin_defaults, authored_position, layer_for_zpos
 from raintux.core.skin import Skin
+from raintux.core.stacking import restack_plan
 from raintux.core.state import AppState, load_state, save_state
 from raintux.measures.disk_measure import set_drive_map
-from raintux.wayland.compositor_detect import CompositorKind, detect_compositor
+from raintux.wayland.compositor_detect import CompositorKind, detect_compositor, new_layer_surfaces_on_top
 from raintux.wayland.layer_window import CaptureOverlay, SkinWindow, monitor_at, monitors
 
 log = logging.getLogger(__name__)
@@ -98,6 +99,10 @@ class RainTuxEngine:
         self._manage_window: Any = None
         self._save_source = 0
         self.tray: Any = None
+        # Skin windows of each layer-shell layer, bottom first, as the compositor stacks them.
+        self._stacks: dict[str, list[SkinWindow]] = {}
+        self._new_on_top = new_layer_surfaces_on_top()
+        self._restack_source = 0
 
     @property
     def compositor(self) -> CompositorKind:
@@ -224,6 +229,8 @@ class RainTuxEngine:
             window.set_skin(skin)
         else:
             window = SkinWindow(self, skin)
+            window.connect("map", self._window_mapped)
+            window.connect("unmap", self._window_unmapped)
         act = ActiveSkin(skin, window)
         self.active[key] = act
         cs.active_file = ini.name
@@ -240,6 +247,7 @@ class RainTuxEngine:
         self._schedule(act)
         self.schedule_save()
         self._changed()
+        self.schedule_restack()
         log.info("activated %s (%s)", config, ini.name)
         return skin
 
@@ -326,7 +334,7 @@ class RainTuxEngine:
             return
         for act in list(self.active.values()):
             self.deactivate_config(act.skin.config)
-        for cfg, cs in sorted(configs.items(), key=lambda kv: kv[1].load_order):
+        for cfg, cs in self._creation_order(list(configs.items())):
             mine = self.state.config(cfg)
             mine.window = cs.window
             mine.load_order = cs.load_order
@@ -418,7 +426,7 @@ class RainTuxEngine:
         if not active and not self.state.first_run_done:
             self._activate_default_layout()
         else:
-            for config, cs in active:
+            for config, cs in self._creation_order(active):
                 try:
                     self.activate_config(config, cs.active_file)
                 except Exception:
@@ -734,6 +742,7 @@ class RainTuxEngine:
                 a.skin.state.z = max(-2, min(2, int(parse_number(args[0], 0))))
                 a.window.apply_state()
             self.schedule_save()
+            self.schedule_restack()
         elif name == "settransparency" and args:
             for a in target(1):
                 a.skin.state.alpha = max(0, min(255, int(parse_number(args[0], 255))))
@@ -886,6 +895,44 @@ class RainTuxEngine:
                     next(iter(self.active.values())).skin.execute("[" + cmd + "]")
                 else:
                     log.warning("bang %s: name the target config as the last argument", cmd)
+
+    # ------------------------------------------------------------------ stacking
+    def _creation_order(self, configs: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
+        """Skins to create, ordered so that their windows stack as Rainmeter's do (AlwaysOnTop,
+        then LoadOrder): the top one last, or first where new surfaces go to the bottom."""
+        ranked = sorted(configs, key=lambda kv: (kv[1].window.z, kv[1].load_order))
+        return ranked if self._new_on_top else ranked[::-1]
+
+    def _stack_rank(self, window: SkinWindow) -> tuple[int, int]:
+        return (window.skin.state.z, self.state.config(window.skin.config).load_order)
+
+    def _window_mapped(self, window: SkinWindow) -> None:
+        self._window_unmapped(window)
+        stack = self._stacks.setdefault(layer_for_zpos(window.skin.state.z), [])
+        stack.append(window) if self._new_on_top else stack.insert(0, window)
+
+    def _window_unmapped(self, window: SkinWindow) -> None:
+        for stack in self._stacks.values():
+            if window in stack:
+                stack.remove(window)
+
+    def schedule_restack(self) -> None:
+        """Order every layer's skins once the current activations are done."""
+        if self._restack_source:
+            return
+
+        def go() -> bool:
+            self._restack_source = 0
+            self.restack()
+            return GLib.SOURCE_REMOVE
+
+        self._restack_source = GLib.idle_add(go, priority=GLib.PRIORITY_LOW)
+
+    def restack(self) -> None:
+        for stack in list(self._stacks.values()):
+            for window in restack_plan(list(stack), self._stack_rank, self._new_on_top):
+                window.set_visible(False)  # mapped again, it is a new surface (see core/stacking.py)
+                window.set_visible(True)
 
     # ------------------------------------------------------------------ windows
     def show_context_menu(self, window: SkinWindow, x: float, y: float) -> None:

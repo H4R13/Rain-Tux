@@ -217,6 +217,25 @@ def test_regexp_substitute_like_rainmeter(tmp_path: Path) -> None:
     assert skin.measure("MeasureEmpty").string_value() == "none"
 
 
+@pytest.mark.parametrize("new_on_top", [True, False])
+@pytest.mark.parametrize("current", ["abcd", "dcba", "badc", "acbd", "dabc", "bcda"])
+def test_restack_plan_orders_a_layer(current: str, new_on_top: bool) -> None:
+    """Sonder's world map (AlwaysOnTop=-2) drew over its Settings (0, LoadOrder=1): within a layer
+    the compositor stacks by mapping order (newest on top, or at the bottom on Sway)."""
+    from raintux.core.stacking import restack_plan
+
+    stack = list(current)  # bottom first; the wanted order is a, b, c, d
+    plan = restack_plan(stack, rank=str, new_on_top=new_on_top)
+    for w in plan:  # what re-mapping does to the compositor's stack
+        stack.remove(w)
+        stack.append(w) if new_on_top else stack.insert(0, w)
+    assert stack == list("abcd")
+    if current == "abcd":
+        assert plan == []
+    if current == "dabc":  # only the window out of place is re-mapped where new ones go on top
+        assert plan == (["d"] if new_on_top else ["c", "b", "a"])
+
+
 @pytest.mark.parametrize(("z", "layer"), [(-2, "BOTTOM"), (-1, "BOTTOM"), (0, "BOTTOM"), (1, "TOP"), (2, "OVERLAY")])
 def test_on_desktop_skins_stay_above_the_wallpaper(z: int, layer: str) -> None:
     """Sonder's skins are AlwaysOnTop=-2; on the background layer swaybg covered them."""
