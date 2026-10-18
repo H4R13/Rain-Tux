@@ -63,6 +63,42 @@ def test_install_backs_up_and_keeps_variables(tmp_path: Path) -> None:
     assert not any(p.name.startswith(".install-") for p in root.iterdir())
 
 
+def test_old_rainstaller_package(tmp_path: Path) -> None:
+    """Simplicity Circles and Elegance 2 are Rainmeter 2.0 packages: Template/Rainstaller.cfg,
+    Template/Skins, layouts as Template/Themes/<Name>/Rainmeter.thm and fonts in Template/Fonts."""
+    pkg = _package(tmp_path / "old.rmskin", {
+        "Template/Rainstaller.cfg": "[Rainstaller]\nName=Circles\nAuthor=FH\nVersion=1.0\nMerge=0\n"
+                                    "KeepVar=Circles\\_Shared\\Settings.inc\nLaunchType=Theme\n"
+                                    'LaunchCommand="Circles Theme"\n',
+        "Template/Skins/Circles/Time/Time.ini": "[Rainmeter]\n",
+        "Template/Skins/Circles/_Shared/Settings.inc": "[Variables]\nA=1\n",
+        "Template/Themes/Circles Theme/Rainmeter.thm": "[Circles\\Time]\nActive=1\n",
+        "Template/Fonts/Round.ttf": "font",
+        "Template/Plugins/64bit/Old.dll": "MZ",
+    }, footer=False)
+    info, zf = open_package(pkg)
+    zf.close()
+    assert (info.name, info.load_type, info.load, info.skins, info.layouts) == (
+        "Circles", "Layout", "Circles Theme", ["Circles"], ["Circles Theme"])
+    skins, layouts = tmp_path / "Skins", tmp_path / "Layouts"
+    install_package(pkg, skins, layouts)
+    assert (skins / "Circles" / "Time" / "Time.ini").is_file()
+    assert (skins / "Circles" / "@Resources" / "Fonts" / "Round.ttf").is_file()
+    assert (layouts / "Circles Theme" / "Rainmeter.ini").read_text() == "[Circles\\Time]\nActive=1\n"
+
+
+def test_old_package_loads_several_skins(tmp_path: Path) -> None:
+    pkg = _package(tmp_path / "old.zip", {
+        "Pack/Rainstaller.cfg": "[Rainstaller]\nName=Pack\nLaunchType=Load\n"
+                                "LaunchCommand=Pack\\A\\A.ini|Pack\\B\\B.ini\n",
+        "Pack/Skins/Pack/A/A.ini": "[Rainmeter]\n",
+        "Pack/Skins/Pack/B/B.ini": "[Rainmeter]\n",
+    }, footer=False)
+    info, zf = open_package(pkg)
+    zf.close()
+    assert info.load_type == "Skin" and info.load_skins == ["Pack\\A\\A.ini", "Pack\\B\\B.ini"]
+
+
 @pytest.mark.parametrize("evil", ["Skins/../../escape.ini", "Skins/Suite/../../../escape.ini", "/abs.ini"])
 def test_zip_slip_is_ignored(tmp_path: Path, evil: str) -> None:
     pkg = _package(tmp_path / "s.rmskin", {"RMSKIN.ini": RMSKIN_INI, "Skins/Suite/ok.ini": "x", evil: "pwned"})

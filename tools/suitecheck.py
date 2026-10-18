@@ -104,8 +104,8 @@ def install(suite: dict, corpus: Path, home: Path) -> dict:
     if not found:
         raise FileNotFoundError(f"no package matches {corpus / suite['package']}")
     info = install_package(Path(found[-1]), skins, layouts)
-    return {"load": info.load, "load_type": info.load_type, "package": Path(found[-1]).name,
-            "plugins": sorted(set(info.plugins))}
+    return {"load": info.load, "load_type": info.load_type, "load_skins": info.load_skins,
+            "package": Path(found[-1]).name, "plugins": sorted(set(info.plugins))}
 
 
 def prepare_home(home: Path, port: int) -> None:
@@ -140,9 +140,10 @@ def load(api: Api, suite: dict, pkg: dict) -> list[str]:
                 bang(f"!Move {xy[0]} {xy[1]} {q(cfg)}")
     elif suite.get("layout") or pkg.get("load_type", "").lower() == "layout":
         bang(f"!LoadLayout {q(suite.get('layout') or pkg['load'])}")
-    elif pkg.get("load"):
-        config, _, ini = pkg["load"].rpartition("\\")
-        bang(f"!ActivateConfig {q(config)} {q(ini)}")
+    else:
+        for skin in pkg.get("load_skins") or ([pkg["load"]] if pkg.get("load") else []):
+            config, _, ini = skin.rpartition("\\")
+            bang(f"!ActivateConfig {q(config)} {q(ini)}")
     for b in suite.get("bangs", []):
         bang(b)
     return failed

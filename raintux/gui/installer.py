@@ -72,9 +72,9 @@ def install_dialog(engine: RainTuxEngine, path: Path, parent: Any = None) -> Non
             if result.load_type.lower() == "layout":
                 GLib.idle_add(lambda: (engine.load_layout(result.load), False)[1])
             else:
-                parts = result.load.replace("/", "\\").split("\\")
-                config, file = "\\".join(parts[:-1]), parts[-1]
-                GLib.idle_add(lambda: (engine._safe_activate(config, file), False)[1])
+                for load in result.load_skins or [result.load]:
+                    config, _sep, file = load.replace("/", "\\").rpartition("\\")
+                    GLib.idle_add(lambda c=config, f=file: (engine._safe_activate(c, f), False)[1])
         if engine._manage_window is not None:
             engine._manage_window.refresh(select=result.skins[0] if result.skins else None)
 

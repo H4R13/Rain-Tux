@@ -1,4 +1,9 @@
-"""Read and install Rainmeter ``.rmskin`` packages (zip + ``RMSKIN.ini`` + footer)."""
+"""Read and install Rainmeter ``.rmskin`` packages (zip + ``RMSKIN.ini`` + footer).
+
+Old packages from Rainmeter 1.x / 2.0 ("Rainstaller", still installed by Rainmeter today) keep
+their files under a root folder holding ``Rainstaller.cfg``, layouts as ``Themes/<Name>/*.thm``
+and fonts in ``Fonts/``; see DialogInstall.cpp.
+"""
 
 from __future__ import annotations
 
@@ -31,6 +36,9 @@ class PackageInfo:
     plugins: list[str] = field(default_factory=list)
     fonts: list[str] = field(default_factory=list)
     python_scripts: bool = False  # a skin has ScriptFile=*.py: it installs into the PythonSkins folder
+    load_skins: list[str] = field(default_factory=list)  # LoadType=Skin: every skin to load (old packages list several)
+    old_format: bool = False  # Rainstaller.cfg package
+    root: tuple[str, ...] = ()  # folder inside the zip that holds Skins/, Layouts/ (Themes/), ...
 
 
 _PY_SCRIPT = re.compile(r"^\s*ScriptFile\s*=\s*\"?[^\r\n\"]*\.py\"?\s*$", re.I | re.M)
@@ -59,11 +67,17 @@ def _safe_parts(name: str) -> tuple[str, ...] | None:
     return p.parts
 
 
-def open_package(path: Path) -> tuple[PackageInfo, zipfile.ZipFile]:
-    """Open an ``.rmskin`` (or plain zip) and read its ``RMSKIN.ini``."""
-    zf = zipfile.ZipFile(path)
-    info = PackageInfo()
-    names = zf.namelist()
+def _under_root(name: str, root: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Parts of a zip member below the package root, or None (outside it, or unsafe)."""
+    parts = _safe_parts(name)
+    if not parts or len(parts) <= len(root):
+        return None
+    if any(a.lower() != b.lower() for a, b in zip(parts, root)):
+        return None
+    return parts[len(root):]
+
+
+def _read_options(info: PackageInfo, zf: zipfile.ZipFile, names: list[str]) -> None:
     ini_name = next((n for n in names if n.lower() == "rmskin.ini"), None)
     if ini_name:
         raw = zf.read(ini_name)
@@ -75,14 +89,45 @@ def open_package(path: Path) -> tuple[PackageInfo, zipfile.ZipFile]:
         info.load_type = sec.get("loadtype", "Skin") or "Skin"
         info.variable_files = [v.strip() for v in sec.get("variablefiles", "").split("|") if v.strip()]
         info.merge_skins = sec.get("mergeskins", "0").strip() == "1"
+        info.load_skins = [info.load] if info.load and info.load_type.lower() == "skin" else []
+        return
+    cfgs = [p for p in (_safe_parts(n) for n in names) if p and p[-1].lower() == "rainstaller.cfg"]
+    if not cfgs:
+        return
+    cfg = min(cfgs, key=len)
+    info.old_format, info.root = True, cfg[:-1]
+    raw = zf.read(next(n for n in names if _safe_parts(n) == cfg))
+    sec = _read_ini(raw.decode(detect_encoding(raw), errors="replace")).get("rainstaller", {})
+    unquote = lambda v: v.strip().strip('"').strip()  # noqa: E731
+    info.name = sec.get("name", "")
+    info.author = sec.get("author", "")
+    info.version = sec.get("version", "")
+    info.merge_skins = sec.get("merge", "0").strip() == "1"
+    info.variable_files = [v.strip() for v in sec.get("keepvar", "").split("|") if v.strip()]
+    launch, command = sec.get("launchtype", "").strip().lower(), unquote(sec.get("launchcommand", ""))
+    if launch == "load":
+        info.load_type = "Skin"
+        info.load_skins = [unquote(v) for v in command.split("|") if unquote(v)]
+        info.load = info.load_skins[0] if info.load_skins else ""
+    elif launch and command:
+        info.load_type, info.load = "Layout", command
+
+
+def open_package(path: Path) -> tuple[PackageInfo, zipfile.ZipFile]:
+    """Open an ``.rmskin`` (or plain zip) and read its ``RMSKIN.ini`` (or old ``Rainstaller.cfg``)."""
+    zf = zipfile.ZipFile(path)
+    info = PackageInfo()
+    names = zf.namelist()
+    _read_options(info, zf, names)
+    layouts_dir, layout_ext = ("themes", ".thm") if info.old_format else ("layouts", "")
     for n in names:
-        parts = _safe_parts(n)
+        parts = _under_root(n, info.root)
         if not parts or len(parts) < 2:
             continue
         top = parts[0].lower()
-        if top == "skins" and parts[1] not in info.skins:
+        if top == "skins" and parts[1] not in info.skins and len(parts) >= 3:
             info.skins.append(parts[1])
-        elif top == "layouts" and parts[1] not in info.layouts:
+        elif top == layouts_dir and parts[1] not in info.layouts and n.lower().endswith(layout_ext):
             info.layouts.append(parts[1])
         elif top == "plugins" and n.lower().endswith(".dll"):
             info.plugins.append(parts[-1])
@@ -129,19 +174,24 @@ def install_package(path: Path, skins_root: Path, layouts_root: Path | None = No
     staging.mkdir()
     try:
         for member in zf.infolist():
-            parts = _safe_parts(member.filename)
+            parts = _under_root(member.filename, info.root)
             if not parts or member.is_dir():
                 continue
             top = parts[0].lower()
+            dests: list[Path] = []
             if top == "skins" and len(parts) >= 3:
-                dest = staging.joinpath(*parts[1:])
-            elif top == "layouts" and layouts_root is not None and len(parts) >= 3:
-                dest = layouts_root.joinpath(*parts[1:])
-            else:
-                continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            with zf.open(member) as src, open(dest, "wb") as out:
-                shutil.copyfileobj(src, out)
+                dests = [staging.joinpath(*parts[1:])]
+            elif top == "layouts" and not info.old_format and layouts_root is not None and len(parts) >= 3:
+                dests = [layouts_root.joinpath(*parts[1:])]
+            elif (top == "themes" and info.old_format and layouts_root is not None and len(parts) >= 3
+                  and parts[-1].lower().endswith(".thm")):  # an old layout: Themes/<Name>/Rainmeter.thm
+                dests = [layouts_root.joinpath(*parts[1:-1], parts[-1][:-4] + ".ini")]
+            elif top == "fonts" and info.old_format and len(parts) == 2 and parts[1].lower().endswith(".ttf"):
+                dests = [staging / skin / "@Resources" / "Fonts" / parts[1] for skin in info.skins]
+            for dest in dests:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(member) as src, open(dest, "wb") as out:
+                    shutil.copyfileobj(src, out)
         backup_root = skins_root / "@Backup"
         for skin in info.skins:
             new = staging / skin
@@ -171,6 +221,6 @@ def install_package(path: Path, skins_root: Path, layouts_root: Path | None = No
 def is_package(data: bytes) -> bool:
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            return any(n.lower() == "rmskin.ini" for n in zf.namelist())
+            return any(n.lower() == "rmskin.ini" or n.lower().endswith("rainstaller.cfg") for n in zf.namelist())
     except zipfile.BadZipFile:
         return False
