@@ -275,6 +275,28 @@ def test_write_key_value_any_file_in_the_skins_folder(tmp_path: Path) -> None:
     assert not (skin.root / "New.inc").exists()
 
 
+def test_include_rules(tmp_path: Path) -> None:
+    """ConfigParser::ReadIniFile: empty @Include is skipped (FoC), [#Var] works in the path
+    (Enigma), the first of duplicate keys / sections in a file wins, a later include overrides."""
+    skin, _ = make_skin(tmp_path, r"""
+        [Variables]
+        Sheet=Dark
+        Color=first
+        Color=second
+        Over=main
+        @Include=
+        @Include2=[#@]Styles\[#Sheet]\Options.inc
+
+        [Variables]
+        Color=third
+
+        [MeterText]
+        Meter=String
+        Text=#Color# #Over# #Style#
+    """, files={"Test/@Resources/Styles/Dark/Options.inc": "Over=ignored\n[Variables]\nOver=included\nStyle=dark\n"})
+    assert skin.meter("MeterText").text == "first included dark"
+
+
 @pytest.mark.gtk
 def test_any_font_weight_draws(tmp_path: Path) -> None:
     """JaxCore and Expressive Windows use FontWeight=650 / 999; Pango.Weight(650) raised."""

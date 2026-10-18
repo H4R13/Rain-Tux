@@ -18,7 +18,7 @@ from raintux.compat.ini_normalizer import read_ini_normalized
 
 log = logging.getLogger(__name__)
 
-_SECTION = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+_NEW_STYLE_VAR = re.compile(r"\[#([^\[\]#]+)\]")
 _MAX_INCLUDE_DEPTH = 16
 
 
@@ -158,8 +158,14 @@ class _Reader:
         canon = self.names.get("variables")
         return dict(self.sections[canon]) if canon else {}
 
-    def read(self, path: Path, stack: tuple[Path, ...], current: str | None = None) -> None:
-        """Read ``path`` into the section map; includes are expanded in place."""
+    def read(self, path: Path, stack: tuple[Path, ...]) -> None:
+        """Read ``path`` into the section map; includes are expanded in place.
+
+        As Rainmeter's ConfigParser::ReadIniFile: within one file only the first of duplicate
+        sections and the first of duplicate keys in a section count, while a later file (an
+        @Include) overrides earlier values; a line starting with "[" opens a section named up to
+        the first "]"; keys before the first section are ignored.
+        """
         path = path.resolve()
         if path in stack or len(stack) >= _MAX_INCLUDE_DEPTH:
             log.warning("include cycle or depth limit, skipped: %s", path)
@@ -169,36 +175,50 @@ class _Reader:
         except OSError as e:
             log.warning("cannot read %s: %s", path, e)
             return
+        current: str | None = None
+        file_sections: set[str] = set()
+        section_keys: set[str] = set()
         for line in text.split("\n"):
             s = line.strip()
             if not s or s.startswith(";"):
                 continue
-            m = _SECTION.match(s)
-            if m:
-                current = m.group(1).strip()
-                self.section(current)
+            if s.startswith("["):
+                name = s[1:].split("]", 1)[0].strip()
+                section_keys = set()
+                current = None if name.lower() in file_sections else name  # a repeated section is not read
+                file_sections.add(name.lower())
+                if current is not None:
+                    self.section(current)
                 continue
             if "=" not in s or current is None:
                 continue
             key, _sep, value = s.partition("=")
             key = key.strip().lower()
+            if not key or key in section_keys:
+                continue
+            section_keys.add(key)
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] == '"' and value.count('"') == 2:
                 # Rainmeter strips one pair of enclosing quotes.
                 value = value[1:-1]
             if _is_include_key(key):
-                from raintux.core.paths import resolve_ci, windows_to_posix
-
-                inc_rel = windows_to_posix(substitute_variables(value, self.variables(), path.parent, self.resources,
-                                                                self.builtins))
-                inc = Path(inc_rel)
-                inc = resolve_ci(inc if inc.is_absolute() else (path.parent / inc))
-                if inc.is_file():
-                    self.read(inc, stack + (path,), current)
-                else:
-                    log.warning("missing include %s (from %s)", inc, path)
+                if value:
+                    self._include(value, path, stack)
                 continue
             self.section(current)[key] = value
+
+    def _include(self, value: str, path: Path, stack: tuple[Path, ...]) -> None:
+        from raintux.core.paths import resolve_ci, windows_to_posix
+
+        table = variable_table(self.variables(), path.parent, self.resources, self.builtins)
+        # Rainmeter expands new-style [#Var] here too (Enigma: @Include=[#@]Styles\[#Stylesheet]\...).
+        text = _NEW_STYLE_VAR.sub(lambda m: table.get(m.group(1).upper(), m.group(0)), value)
+        inc = Path(windows_to_posix(expand_variables(text, table)))
+        inc = resolve_ci(inc if inc.is_absolute() else (path.parent / inc))
+        if inc.is_file():
+            self.read(inc, stack + (path,))
+        else:
+            log.warning("missing include %s (from %s)", inc, path)
 
 
 def parse_skin_ini(ini_path: Path, resources: Path | None = None, builtins: dict[str, str] | None = None) -> ParsedSkin:
