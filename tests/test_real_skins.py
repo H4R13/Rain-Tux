@@ -419,6 +419,85 @@ def test_lua_set_variable_and_window_calls(tmp_path: Path) -> None:
     assert ("fadewindow", ["255", "0"]) in host.host_bangs
 
 
+def test_lua_parse_formula_returns_what_rainmeter_does(tmp_path: Path) -> None:
+    pytest.importorskip("lupa")
+    skin, _ = make_skin(tmp_path, """
+        [Variables]
+        Two=2
+
+        [MeasureTen]
+        Measure=Calc
+        Formula=10
+
+        [MeasureScript]
+        Measure=Script
+        ScriptFile=s.lua
+    """, files={"Test/s.lua": """
+        function Update()
+          r = {
+            SKIN:ParseFormula('(MeasureTen / 4 + 1)'),
+            SKIN:ParseFormula('(' .. SKIN:GetVariable('Two') .. ' * 3)'),  -- Monstercat's Factory.lua
+            SKIN:ParseFormula('2 + 3'),         -- only text in parentheses is a formula
+            SKIN:ParseFormula('(#Two# * 3)'),   -- and its variables are not replaced
+            SKIN:ParseFormula('(Nope + 1)'),
+            SKIN:ParseFormula(' 12 '),          -- not a formula: lua_tonumber of the argument
+            SKIN:ParseFormula(7),
+            SKIN:ParseFormula('abc'),
+            SKIN:ParseFormula(),
+          }
+          return 0
+        end
+    """})
+    skin.update()
+    r = skin.measure("MeasureScript")._lua.globals().r
+    assert [r[i] for i in range(1, 10)] == [3.5, 6, 0, 0, 0, 12, 7, 0, 0]
+
+
+def test_bangs_take_group_selectors(tmp_path: Path) -> None:
+    skin, _ = make_skin(tmp_path, """
+        [MeasureLoopA]
+        Measure=Loop
+        Group=Loops
+
+        [MeasureLoopB]
+        Measure=Loop
+        Group=Loops
+
+        [MeasureLoopC]
+        Measure=Loop
+
+        [MeterA]
+        Meter=String
+        Group=Labels
+        Text=a
+
+        [MeterB]
+        Meter=String
+        Group=Labels | Other
+        Text=b
+
+        [MeterC]
+        Meter=String
+        Text=c
+    """)  # Skin.cpp: ConsumeGroupSelector in ShowMeter, SetOption, CommandMeasure…
+    for _ in range(3):
+        skin.update()
+    a, b, c = skin.meter("MeterA"), skin.meter("MeterB"), skin.meter("MeterC")
+    loops = [skin.measure(f"MeasureLoop{n}") for n in "ABC"]
+    counted = loops[2].value
+    assert counted >= 2
+    skin.execute('[!HideMeter "Group=Labels"][!ShowMeterGroup "Group=Other"]'
+                 '[!SetOption Group=Labels Text x][!SetOption group=Labels Text y]'
+                 '[!DisableMouseAction Group=Labels LeftMouseUpAction][!CommandMeasure Group=Loops Reset]')
+    assert (a.hidden, b.hidden, c.hidden) == (True, False, False)
+    assert [m.option_raw("Text") for m in (a, b, c)] == ["x", "x", "c"]  # "group=" is a section name
+    assert "leftmouseupaction" in a.disabled_actions and not c.disabled_actions
+    skin.update()
+    assert [m.value for m in loops] == [0, 0, counted + 1]
+    skin.execute("[!DisableMeasure Group=Loops][!TogglePauseMeasure Group=Loops][!UpdateMeasure Group=Loops]")
+    assert [(m.disabled, m.paused) for m in loops] == [(True, True), (True, True), (False, False)]
+
+
 @pytest.mark.gtk
 def test_fade_window_fades_between_the_given_values(tmp_path: Path) -> None:
     from types import SimpleNamespace

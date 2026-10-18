@@ -216,7 +216,8 @@ function SKIN:SetOptionGroup(g, ...) g = wstr(g) each_pair(function(k, v) py.set
 function SKIN:GetVariable(n, d) local v = py.var(n) if v == nil then return d end return v end
 function SKIN:SetVariable(...) each_pair(py.setvariable, ...) end
 function SKIN:ReplaceVariables(s) return py.replace(s) end
-function SKIN:ParseFormula(s) return py.formula(s) end
+-- A formula's value, else lua_tonumber of the argument as Rainmeter returns: the number, or 0.
+function SKIN:ParseFormula(s) return py.formula(wstr(s)) or tonumber(s) or 0 end
 function SKIN:MoveWindow(x, y) py.movewindow(tonumber(x) or 0, tonumber(y) or 0) end
 function SKIN:FadeWindow(from, to) py.fadewindow(tonumber(from) or 0, tonumber(to) or 0) end
 function SKIN:MakePathAbsolute(p) return py.abspath(p) end
@@ -323,9 +324,7 @@ class _Api:
 
     def setoption(self, section: str, key: str, value: str, group: bool) -> None:
         """Skin::SetOption: the value is stored raw (its variables resolve when the section re-reads,
-        on its next update) and nothing updates now. ``Group=Name`` targets a group, as in Rainmeter."""
-        if section.startswith("Group="):
-            section, group = section[6:], True
+        on its next update) and nothing updates now. The bang takes ``Group=Name`` for a group."""
         self.skin.bang("setoptiongroup" if group else "setoption", [section, key, value])
 
     def bang(self, *args: Any) -> None:
@@ -356,11 +355,18 @@ class _Api:
     def replace(self, s: Any) -> str:
         return self.skin.resolve(_lua_str(s), section_vars=True)
 
-    def formula(self, s: Any) -> float | None:
-        try:
-            return evaluate(self.skin.resolve(_lua_str(s), section_vars=True), self.skin.measure_number)
-        except FormulaError:
+    def formula(self, s: str) -> float | None:
+        """ConfigParser::ParseFormula: only text in parentheses is a formula, and its #Variables#
+        are not replaced (measure names are); None when it isn't one or doesn't parse."""
+        if not (s.startswith("(") and s.endswith(")")):
             return None
+        try:
+            value = evaluate(s, self.skin.measure_number)
+        except FormulaError as e:
+            self.m.report_error("parseformula", "SKIN:ParseFormula(%s): %s", s, e)
+            return None
+        self.m.clear_error("parseformula")
+        return value
 
     def abspath(self, p: Any) -> str:
         return str(self.skin.path(str(p)))

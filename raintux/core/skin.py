@@ -95,6 +95,14 @@ _LOCAL_ARGC: dict[str, int] = {
 }
 
 
+def group_selector(target: str) -> str | None:
+    """Rainmeter's ConsumeGroupSelector: the group a ``Group=Name`` bang target names, else None.
+
+    The prefix is case-sensitive, as in Rainmeter; "group=Name" is an ordinary section name.
+    """
+    return target[6:] if target.startswith("Group=") else None
+
+
 class SkinHost(Protocol):
     """What a skin needs from the desktop side (implemented by the GTK engine)."""
 
@@ -807,8 +815,8 @@ class Skin:
         targets: list[Section] = []
         if len(args) > argc:
             target, args = args[0], args[1:]
-            if target.lower().startswith("group="):
-                targets = self._group(target[6:], meters=True, measures=True)
+            if group_selector(target) is not None:
+                targets = self._group(target, meters=True, measures=True)
             else:
                 sec = self.section(target)
                 if sec is None:
@@ -833,8 +841,9 @@ class Skin:
             return
         target, rest = args[0], args[1:]
         skins: list[Skin] = []
-        if target.lower().startswith("group="):
-            group = target[6:].strip().lower()
+        group = group_selector(target)
+        if group is not None:
+            group = group.strip().lower()
             all_skins = getattr(self.host, "all_skins", None)
             skins = [s for s in (all_skins() if all_skins else [self]) if group in s.config_groups()]
         else:
@@ -866,6 +875,9 @@ class Skin:
         self.set_variable(name, self._evaluated(value))
 
     def _bang_setoption(self, section: str, key: str, value: str) -> None:
+        if group_selector(section) is not None:
+            self._bang_setoptiongroup(section, key, value)
+            return
         sec = self.section(section)
         if sec is None:
             log.info("!SetOption: no section [%s] in %s", section, self.config)
@@ -983,6 +995,9 @@ class Skin:
         self._set_measure_flag(self._group(group, measures=True), "paused", None)
 
     def _bang_commandmeasure(self, name: str, args: str) -> None:
+        if group_selector(name) is not None:
+            self._bang_commandmeasuregroup(args, name)
+            return
         m = self.measure(name)
         if m is None:
             log.info("!CommandMeasure: no measure [%s] in %s", name, self.config)
@@ -1052,12 +1067,20 @@ class Skin:
         self._mouse_action_change(self._group(group, meters=True), actions, "clear")
 
     def _targets(self, name: str, items: Any) -> list[Any]:
+        """The section ``name``, all of them for ``*``, or a group's for ``Group=Name``."""
+        group = group_selector(name)
+        if group is not None:
+            return [s for s in items if s.in_group(group)]
         n = name.strip().lower()
         if n == "*":
             return list(items)
         return [s for s in items if s.name.lower() == n]
 
     def _group(self, group: str, meters: bool = False, measures: bool = False) -> list[Section]:
+        # Rainmeter's group bangs take a "Group=Name" selector too: !ShowMeterGroup "Group=Name".
+        selected = group_selector(group)
+        if selected is not None:
+            group = selected
         out: list[Section] = []
         if measures:
             out += [m for m in self.measures.values() if m.in_group(group)]
