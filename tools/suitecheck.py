@@ -172,6 +172,27 @@ def classify(log_text: str) -> tuple[list[tuple[str, int]], list[tuple[str, int]
     return list(errors.items()), list(warnings.items())
 
 
+def stop(proc: subprocess.Popen, api: Api) -> None:
+    """Quit RainTux and wait until its API port is free (the next suite reuses it). SIGTERM goes to
+    the whole D-Bus session; a RainTux too busy to quit in 10 s is killed."""
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    end = time.time() + 10
+    while time.time() < end:
+        try:
+            api.active()
+        except OSError:
+            break
+        time.sleep(0.3)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
+
+
 def run_suite(suite: dict, args: argparse.Namespace) -> dict:
     name = suite["name"]
     work = Path(args.work) / slug(name)
@@ -210,13 +231,7 @@ def run_suite(suite: dict, args: argparse.Namespace) -> dict:
             if proc.poll() is not None:
                 result["crashed"] = proc.returncode
     finally:
-        if proc.poll() is None:
-            os.killpg(proc.pid, signal.SIGTERM)
-            try:
-                proc.wait(10)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
+        stop(proc, api)
     errors, warnings = classify(log_path.read_text(encoding="utf-8", errors="replace"))
     result["errors"], result["warnings"] = errors, warnings
     return result
