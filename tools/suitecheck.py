@@ -225,10 +225,14 @@ def run_suite(suite: dict, args: argparse.Namespace) -> dict:
             shot = Path(args.out) / f"{slug(name)}.png"
             subprocess.run(["grim", str(shot)], check=False)
             result["screenshot"] = shot.name
-            try:
-                result["active"] = api.active()
-            except OSError as e:
-                result["active_error"] = str(e)
+            for attempt in range(3):  # a suite that is still starting may hold the main loop a while
+                try:
+                    result["active"] = api.active()
+                    result.pop("active_error", None)
+                    break
+                except OSError as e:
+                    result["active_error"] = str(e)
+                    time.sleep(2)
             if proc.poll() is not None:
                 result["crashed"] = proc.returncode
     finally:
