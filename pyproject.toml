@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "raintux"
-version = "0.1.0"
-description = "Rainmeter-style desktop overlays for Linux Wayland"
+version = "0.9.0"
+description = "Rainmeter-compatible desktop skins for Linux (Wayland)"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
-authors = [{ name = "RainTux contributors" }]
+license = "GPL-2.0-or-later"
+authors = [{ name = "Viktor_Hashmat" }, { name = "RainTux contributors" }]
 dependencies = [
     "pycairo>=1.26.0",
     "PyGObject>=3.48.0",
@@ -21,8 +21,7 @@ dependencies = [
     "Pillow>=10.2.0",
     "watchdog>=4.0.0",
     "rich>=13.7.0",
-    "dbus-python>=1.3.2",
-    "pywayland>=0.4.15",
+    "lupa>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -31,17 +30,17 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
 ]
-lua = ["lupa>=2.0"]
+audiolevel = ["numpy>=1.24"]
+# GNOME helper / MPRIS over D-Bus; needs libdbus-1-dev to build (or use the distro's python3-dbus).
+dbus = ["dbus-python>=1.3.2"]
 audio = ["pulsectl>=23.5.2"]
 
 [project.scripts]
 raintux = "raintux.__main__:main"
 
 [tool.hatch.build.targets.wheel]
+# raintux/data (skins, assets) ships automatically as package data.
 packages = ["raintux"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"raintux/data" = "raintux/data"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

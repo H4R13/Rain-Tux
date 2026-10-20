@@ -1,0 +1,525 @@
+{
+  "_comment": [
+    "Popular Rainmeter suites for tools/suitecheck.py. The skins are third-party: download them",
+    "yourself from the url into <corpus>/<dir>/ (one folder per suite) and keep them out of this repo.",
+    "package: .rmskin glob under the corpus folder; folder: an unpacked skin folder (absolute or under the corpus).",
+    "configs: [config, file, x, y] to load instead of the package's own Load (a welcome or setup skin);",
+    "x / y are where a user would drag it, and are optional. layout: a layout to load instead.",
+    "bangs: run after loading. wait: seconds before the screenshot."
+  ],
+  "suites": [
+    {
+      "name": "illustro",
+      "url": "https://github.com/rainmeter/rainmeter/tree/master/Build/Skins/illustro",
+      "folder": "/root/rmsrc/Build/Skins/illustro",
+      "configs": [
+        [
+          "illustro\\Clock",
+          "Clock.ini",
+          40,
+          40
+        ],
+        [
+          "illustro\\System",
+          "System.ini",
+          40,
+          130
+        ],
+        [
+          "illustro\\Network",
+          "Network.ini",
+          40,
+          260
+        ],
+        [
+          "illustro\\Disk",
+          "1 Disk.ini",
+          40,
+          390
+        ],
+        [
+          "illustro\\Recycle Bin",
+          "Recycle Bin.ini",
+          40,
+          480
+        ],
+        [
+          "illustro\\Google",
+          "Google.ini",
+          40,
+          590
+        ],
+        [
+          "illustro\\Welcome",
+          "Welcome.ini",
+          560,
+          260
+        ]
+      ]
+    },
+    {
+      "name": "Summit",
+      "url": "",
+      "note": "a user's own copy of the Summit suite (RMSKIN.ini name: Summit fixed)",
+      "package": "summit/*.rmskin"
+    },
+    {
+      "name": "Win10 Widgets",
+      "url": "https://github.com/tjmarkham/win10widgets/releases",
+      "package": "tjmarkham_win10widgets/*.rmskin"
+    },
+    {
+      "name": "ModernGadgets",
+      "url": "https://github.com/raiguard/ModernGadgets/releases",
+      "package": "raiguard_ModernGadgets/*.rmskin",
+      "configs": [
+        [
+          "ModernGadgets\\CpuMeter",
+          "CpuMeter.ini",
+          1590,
+          20
+        ],
+        [
+          "ModernGadgets\\NetworkMeter",
+          "NetworkMeter.ini",
+          1290,
+          20
+        ],
+        [
+          "ModernGadgets\\DisksMeter",
+          "DisksMeter.ini",
+          1290,
+          420
+        ],
+        [
+          "ModernGadgets\\Chronometer",
+          "Chronometer.ini",
+          990,
+          20
+        ],
+        [
+          "ModernGadgets\\Calendar",
+          "Calendar.ini",
+          990,
+          260
+        ],
+        [
+          "ModernGadgets\\ProcessMeter",
+          "ProcessMeter.ini",
+          1590,
+          560
+        ],
+        [
+          "ModernGadgets\\BatteryMeter",
+          "BatteryMeter.ini",
+          990,
+          600
+        ],
+        [
+          "ModernGadgets\\AudioMeter",
+          "AudioMeter.ini",
+          690,
+          20
+        ]
+      ]
+    },
+    {
+      "name": "ModernGadgets setup",
+      "url": "https://github.com/raiguard/ModernGadgets/releases",
+      "package": "raiguard_ModernGadgets/*.rmskin"
+    },
+    {
+      "name": "SysDash",
+      "url": "https://github.com/marcopixel/SysDash/releases",
+      "package": "marcopixel_SysDash/*.rmskin"
+    },
+    {
+      "name": "Sonder",
+      "url": "https://github.com/mpurses/Sonder/releases",
+      "package": "mpurses_Sonder/*.rmskin"
+    },
+    {
+      "name": "DetailedSystemMonitor",
+      "url": "https://github.com/Lssg97/DetailedSystemMonitor/releases",
+      "package": "Lssg97_DetailedSystemMonitor/*.rmskin",
+      "configs": [
+        [
+          "监控-详细系统信息",
+          "DetailedSystemMonitor.ini",
+          300,
+          30
+        ]
+      ]
+    },
+    {
+      "name": "Fountain of Colors",
+      "url": "https://github.com/alatsombath/Fountain-of-Colors/releases",
+      "package": "alatsombath_fountain-of-colors/*.rmskin",
+      "configs": [
+        [
+          "Fountain of Colors",
+          "Fountain of Colors.ini",
+          200,
+          450
+        ]
+      ]
+    },
+    {
+      "name": "Fountain of Colors install",
+      "url": "https://github.com/alatsombath/Fountain-of-Colors/releases",
+      "package": "alatsombath_fountain-of-colors/*.rmskin"
+    },
+    {
+      "name": "Monstercat Visualizer",
+      "url": "https://github.com/marcopixel/monstercat-visualizer/releases",
+      "package": "marcopixel_monstercat-visualizer/*.rmskin",
+      "configs": [
+        [
+          "monstercat-visualizer",
+          "visualizer.ini",
+          150,
+          450
+        ],
+        [
+          "monstercat-visualizer\\Song Information",
+          "Left.ini",
+          150,
+          300
+        ]
+      ]
+    },
+    {
+      "name": "Monstercat Visualizer intro",
+      "url": "https://github.com/marcopixel/monstercat-visualizer/releases",
+      "package": "marcopixel_monstercat-visualizer/*.rmskin"
+    },
+    {
+      "name": "Mond",
+      "url": "https://www.deviantart.com/search?q=mond+rainmeter",
+      "note": "DeviantArt (download needs an account)",
+      "package": "deviantart_mond/*.rmskin"
+    },
+    {
+      "name": "Elegance 2",
+      "url": "https://www.deviantart.com/lilshizzy",
+      "note": "DeviantArt; an old Rainstaller (.cfg) package",
+      "package": "deviantart_elegance-2/*.rmskin",
+      "configs": [
+        [
+          "Elegance2\\Clock",
+          "Clock_hori1.ini",
+          60,
+          60
+        ],
+        [
+          "Elegance2\\Date",
+          "Date_hori1.ini",
+          60,
+          200
+        ],
+        [
+          "Elegance2\\System\\cpu",
+          "cpu_1.ini",
+          700,
+          60
+        ],
+        [
+          "Elegance2\\System\\ram",
+          "ram_1.ini",
+          700,
+          160
+        ],
+        [
+          "Elegance2\\System\\hdd\\drive1",
+          "hdd1_1.ini",
+          700,
+          260
+        ],
+        [
+          "Elegance2\\System\\network\\download",
+          "netdown_1.ini",
+          700,
+          360
+        ],
+        [
+          "Elegance2\\System\\network\\upload",
+          "netup_1.ini",
+          700,
+          460
+        ],
+        [
+          "Elegance2\\Recycle",
+          "Bin_1.ini",
+          700,
+          560
+        ],
+        [
+          "Elegance2\\Music",
+          "NowPlaying_1.ini",
+          60,
+          400
+        ]
+      ]
+    },
+    {
+      "name": "Honeycomb",
+      "url": "https://www.deviantart.com/search?q=honeycomb+rainmeter",
+      "note": "DeviantArt (download needs an account)",
+      "package": "deviantart_honeycomb/*.rmskin",
+      "configs": [
+        [
+          "Honeycomb\\chrome",
+          "chrome.ini",
+          400,
+          300
+        ],
+        [
+          "Honeycomb\\steam",
+          "steam.ini",
+          520,
+          300
+        ],
+        [
+          "Honeycomb\\spotify",
+          "spotify.ini",
+          460,
+          405
+        ],
+        [
+          "Honeycomb\\music",
+          "music.ini",
+          580,
+          405
+        ],
+        [
+          "Honeycomb\\reddit",
+          "reddit.ini",
+          640,
+          300
+        ],
+        [
+          "Honeycomb\\notepad",
+          "notepad.ini",
+          340,
+          405
+        ],
+        [
+          "Honeycomb\\gimp",
+          "gimp.ini",
+          400,
+          510
+        ],
+        [
+          "Honeycomb\\settings",
+          "settings.ini",
+          1200,
+          300
+        ]
+      ]
+    },
+    {
+      "name": "Simplicity Circles",
+      "url": "https://www.deviantart.com/flyinghyrax",
+      "note": "DeviantArt; an old Rainstaller (.cfg) package",
+      "package": "deviantart_simplicity-circles/*.rmskin"
+    },
+    {
+      "name": "Enigma",
+      "url": "https://github.com/kaelri/enigma",
+      "note": "the repository (no release files): unpack its zip to kaelri_enigma/unpacked",
+      "folder": "kaelri_enigma/unpacked/enigma-master",
+      "layout": "Enigma Basic"
+    },
+    {
+      "name": "JaxCore",
+      "url": "https://github.com/Jax-Core/JaxCore/releases",
+      "package": "Jax-Core_JaxCore/*.rmskin"
+    },
+    {
+      "name": "Monterey",
+      "url": "https://github.com/creewick/MontereyRainmeter/releases",
+      "package": "creewick_MontereyRainmeter/*.rmskin",
+      "configs": [
+        [
+          "Monterey\\Widgets\\Clock",
+          "Medium.ini",
+          60,
+          60
+        ],
+        [
+          "Monterey\\Widgets\\Calendar",
+          "Medium.ini",
+          460,
+          60
+        ],
+        [
+          "Monterey\\Widgets\\Weather",
+          "Medium.ini",
+          860,
+          60
+        ],
+        [
+          "Monterey\\Widgets\\Monitor",
+          "Medium.ini",
+          60,
+          300
+        ],
+        [
+          "Monterey\\Widgets\\Music",
+          "Medium.ini",
+          460,
+          300
+        ],
+        [
+          "Monterey\\Widgets\\Volume",
+          "Small.ini",
+          860,
+          300
+        ],
+        [
+          "Monterey\\Widgets\\Timer",
+          "Small.ini",
+          1060,
+          300
+        ],
+        [
+          "Monterey\\Widgets\\Notes",
+          "Medium.ini",
+          60,
+          540
+        ]
+      ]
+    },
+    {
+      "name": "Monterey settings",
+      "url": "https://github.com/creewick/MontereyRainmeter/releases",
+      "package": "creewick_MontereyRainmeter/*.rmskin"
+    },
+    {
+      "name": "Elementary",
+      "url": "https://github.com/flyinghyrax/Elementary/releases",
+      "package": "flyinghyrax_Elementary/*.rmskin"
+    },
+    {
+      "name": "Lano Visualizer",
+      "url": "https://github.com/marcopixel/Lano-Visualizer/releases",
+      "package": "marcopixel_Lano-Visualizer/*.rmskin",
+      "configs": [
+        [
+          "Lano-Visualizer",
+          "visualizer.ini",
+          150,
+          500
+        ],
+        [
+          "Lano-Visualizer\\Song Information",
+          "Left.ini",
+          150,
+          380
+        ]
+      ]
+    },
+    {
+      "name": "SystemFetch",
+      "url": "https://github.com/Meti0X7CB/SystemFetch/releases",
+      "package": "Meti0X7CB_SystemFetch/*.rmskin",
+      "configs": [
+        [
+          "SystemFetch\\Clock",
+          "Clock1.ini",
+          60,
+          60
+        ],
+        [
+          "SystemFetch\\Calendar",
+          "Calendar.ini",
+          60,
+          300
+        ],
+        [
+          "SystemFetch\\System",
+          "System.ini",
+          700,
+          60
+        ],
+        [
+          "SystemFetch\\HWMonitor",
+          "HWMonitor.ini",
+          700,
+          400
+        ],
+        [
+          "SystemFetch",
+          "Visualizer.ini",
+          300,
+          800
+        ]
+      ]
+    },
+    {
+      "name": "Expressive Windows",
+      "url": "https://github.com/Runixe786/Expressive-Windows/releases",
+      "package": "Runixe786_Expressive-Windows/*.rmskin",
+      "configs": [
+        [
+          "MD3 Expressive\\Clock",
+          "style 1.ini",
+          60,
+          60
+        ],
+        [
+          "MD3 Expressive\\Date",
+          "Style 1.ini",
+          460,
+          60
+        ],
+        [
+          "MD3 Expressive\\Battery",
+          "Style 1.ini",
+          860,
+          60
+        ],
+        [
+          "MD3 Expressive\\Monitor",
+          "Style 1.ini",
+          60,
+          400
+        ],
+        [
+          "MD3 Expressive\\Music",
+          "Style 1.ini",
+          460,
+          400
+        ],
+        [
+          "MD3 Expressive\\Weather",
+          "Style 1.ini",
+          860,
+          400
+        ],
+        [
+          "MD3 Expressive\\Events",
+          "Style 1.ini",
+          1260,
+          60
+        ],
+        [
+          "MD3 Expressive\\AI search",
+          "Style 1.ini",
+          1260,
+          400
+        ]
+      ]
+    },
+    {
+      "name": "Expressive Windows settings",
+      "url": "https://github.com/Runixe786/Expressive-Windows/releases",
+      "package": "Runixe786_Expressive-Windows/*.rmskin"
+    },
+    {
+      "name": "FluentDash",
+      "url": "https://github.com/maze404/FluentDash/releases",
+      "package": "maze404_FluentDash/*.rmskin"
+    }
+  ]
+}

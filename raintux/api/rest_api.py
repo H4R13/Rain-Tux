@@ -10,11 +10,16 @@ from urllib.parse import unquote
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from raintux.core.config import RainTuxConfig
 
 log = logging.getLogger(__name__)
+
+
+class BangRequest(BaseModel):
+    bang: str
 
 
 class SkinConfigUpdate(BaseModel):
@@ -29,6 +34,14 @@ class SkinConfigUpdate(BaseModel):
 def build_app(engine: Any, cfg: RainTuxConfig) -> FastAPI:
     """Create the FastAPI app bound to a running :class:`~raintux.core.engine.RainTuxEngine`."""
     app = FastAPI(title="RainTux API", version="0.1.0")
+    # The Skin Manager (Vite, :8080) is a different origin than the API (:7272);
+    # allow loopback origins only so browsers can call us but random sites can't.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$",
+        allow_methods=["GET", "POST", "PUT"],
+        allow_headers=["Content-Type"],
+    )
     app.state.engine = engine
     app.state.cfg = cfg
     app.state.ws_clients: set[WebSocket] = set()
@@ -39,7 +52,7 @@ def build_app(engine: Any, cfg: RainTuxConfig) -> FastAPI:
 
     @app.get("/skins/active")
     async def active_skins() -> list[dict[str, Any]]:
-        return [{"id": sid, "path": str(rt.ini_path)} for sid, rt in engine.skins.items()]
+        return await asyncio.to_thread(engine.active_list_threadsafe)
 
     @app.post("/skins/{skin_path:path}/load")
     async def load_skin(skin_path: str) -> dict[str, str]:
@@ -65,29 +78,38 @@ def build_app(engine: Any, cfg: RainTuxConfig) -> FastAPI:
     @app.get("/skins/{skin_path:path}/config")
     async def get_skin_config(skin_path: str) -> dict[str, Any]:
         sid = unquote(skin_path).strip()
-        rt = engine.skins.get(sid)
+        active = {a["id"]: a for a in await asyncio.to_thread(engine.active_list_threadsafe)}
+        rt = active.get(sid)
         if not rt:
             raise HTTPException(status_code=404, detail="skin not loaded")
         return {
             "id": sid,
-            "path": str(rt.ini_path),
+            "path": rt["path"],
             "compositor": engine.compositor.value,
         }
 
     @app.put("/skins/{skin_path:path}/config")
     async def put_skin_config(skin_path: str, body: SkinConfigUpdate) -> dict[str, str]:
-        """TODO: apply X/Y / transparency to GTK window (Phase 1 stub)."""
+        """Move the window, change transparency (0..1) or click-through."""
         sid = unquote(skin_path).strip()
-        if sid not in engine.skins:
+        ok = await asyncio.to_thread(
+            engine.apply_window_settings, sid, body.x, body.y, body.transparency, body.click_through
+        )
+        if not ok:
             raise HTTPException(status_code=404, detail="skin not loaded")
-        _ = body
-        return {"status": "noop", "id": sid}
+        return {"status": "updated", "id": sid}
+
+    @app.post("/bang")
+    async def run_bang(body: BangRequest) -> dict[str, str]:
+        """Run a bang like Rainmeter's command line: ``!Refresh Config`` / ``[!SetVariable A 1 Config]``."""
+        await asyncio.to_thread(engine.run_bang_threadsafe, body.bang)
+        return {"status": "ok"}
 
     @app.get("/system/status")
     async def system_status() -> dict[str, Any]:
         return {
             "compositor": engine.compositor.value,
-            "skins_loaded": list(engine.skins.keys()),
+            "skins_loaded": [a["id"] for a in await asyncio.to_thread(engine.active_list_threadsafe)],
             "api": {"host": cfg.api.host, "port": cfg.api.port},
         }
 

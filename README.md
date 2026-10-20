@@ -1,109 +1,212 @@
 # RainTux
 
-Rainmeter-style transparent desktop overlays for Linux, targeting **Wayland** compositors. The stack combines a Python core, GTK4 + Cairo rendering, and (where available) **wlr-layer-shell** / **gtk4-layer-shell** for desktop-layer surfaces.
+**Rainmeter skins on the Linux desktop.** RainTux reads Rainmeter `.ini` skins and `.rmskin`
+packages and draws them as desktop widgets on Wayland (Sway, Hyprland, KDE Plasma, river,
+Wayfire, niri, labwc, COSMIC…). It follows Rainmeter's own behaviour: one ordered update cycle
+per skin, the same option syntax, bangs, section variables, mouse actions, layouts and the
+right-click menu you know from Windows.
 
-## Requirements
+![illustro skins and the RainTux suite on Sway](docs/screenshot.png)
 
-- Python 3.11+
-- [uv](https://github.com/astral-sh/uv) (recommended) or `pip`
-- GTK 4, GObject Introspection, Cairo, Pango (system packages)
-- Wayland session
-
-### System packages (names vary by distro)
-
-**Arch / Fedora / openSUSE**
-
-- `gtk4`, `python-gobject`, `cairo`, `pango`, `gdk-pixbuf2`
-- **Layer shell (Phase 1 default):** `gtk4-layer-shell` (provides GObject bindings for layered GTK4 windows on wlroots and KDE KWin)
-
-**Debian / Ubuntu**
-
-- `libgtk-4-1`, `gir1.2-gtk-4.0`, `libcairo2-dev`, `python3-gi`, `python3-gi-cairo`
-- `libgtk4-layer-shell0` and typelibs if packaged (e.g. `gir1.2-gtk4layershell-1.0` when available), or build [gtk4-layer-shell](https://github.com/wmww/gtk4-layer-shell) from source.
-
-**dbus**
-
-- `python-dbus` / `dbus-python` dependencies for MPRIS and future GNOME helper (Phase 2+).
-
-Install Python deps:
+## Install
 
 ```bash
-make install
-# or
-uv sync
+curl -fsSL https://raw.githubusercontent.com/H4R13/Rain-Tux/main/install.sh | bash
 ```
 
-## Running
+The installer is RainTux's `setup.exe`: it installs the system packages (GTK 4, PyGObject,
+gtk4-layer-shell — built from source on distros that don't ship it), downloads RainTux from
+GitHub into `~/.local/share/raintux`, creates a Python environment, adds RainTux to the app
+menu, registers `.rmskin` files so double-clicking one installs it, and starts RainTux at login.
+Options: `--branch NAME`, `--yes`, `--no-system-packages`, `--no-autostart`, `--uninstall`.
+To try a branch before it is merged:
 
 ```bash
-make run
-# or
-python -m raintux
+curl -fsSL https://raw.githubusercontent.com/H4R13/Rain-Tux/feat/rainmeter-parity/install.sh | bash -s -- --branch feat/rainmeter-parity
 ```
 
-**First launch:** a **splash** (optional GIF) and **terms** dialog run once. The GIF plays **one full loop** (frame durations summed via Pillow), then the EULA. After you check *I agree* and **Continue**, `~/.config/raintux/first_run_ok` is created. Skip: `RAINTUX_SKIP_FIRST_RUN=1`.
+Supported: Ubuntu 24.04+, Debian 13+, Fedora 39+, Arch, openSUSE Tumbleweed (Python 3.11+, GTK 4.12+).
 
-**Splash path:** **`launch.env`** sets `RAINTUX_SPLASH_GIF=loading_bg.gif` (next to `README.md`). If that line is missing, RainTux still looks for **`loading_bg.gif` in the repo root**, then `raintux installer temp/loading_bg.gif`, then `raintux/data/assets/splash.gif`. Export `RAINTUX_SPLASH_GIF` to override `launch.env`. No GIF → placeholder splash for `RAINTUX_SPLASH_SECONDS` (default `2.5`).
-
-Development (verbose logging, reload-friendly defaults):
+Manual install from a checkout:
 
 ```bash
-make dev
+python3 -m venv --system-site-packages .venv      # PyGObject + pycairo from your distro
+.venv/bin/pip install -e .
+.venv/bin/python -m raintux
 ```
 
-## Compositor notes
+## Using it
 
-### Hyprland / Sway / other wlroots compositors
+| Rainmeter | RainTux |
+|-----------|---------|
+| Tray icon → Manage | Tray icon (left click) or the **RainTux** app-menu entry opens **Manage** |
+| Manage: Skins / Layouts / Settings / About-Log | Same tabs: load variants, position, transparency, zoom, toggles; save/load layouts; start at login; log |
+| Right-click a skin | Same menu: Variants, Settings (Position, Transparency, Hide on mouse over, Draggable, Save position, Snap to edges, Click through, Keep on screen), custom `ContextTitle` items, Manage / Edit / Refresh / Unload skin |
+| Drag skins, snapping to edges and other skins | Same (Ctrl + right-click always opens the menu) |
+| Install `.rmskin` (double-click) | Double-click, `raintux file.rmskin`, or **Install skin…** in Manage. Existing skins are backed up to `Skins/@Backup`, `VariableFiles` keep your values, layouts and fonts are installed |
+| `Rainmeter.exe !Bang …` | `raintux '!Bang' args…` talks to the running instance |
 
-Install **gtk4-layer-shell**. RainTux selects the WLR-style backend when layer shell globals are present or when `XDG_CURRENT_DESKTOP` indicates a wlroots-based session. Surfaces use the **BOTTOM** layer and transparent RGBA by default.
+Skins live in `~/RainTux/Skins/<Suite>/<Config>/<Skin>.ini`, exactly like `Documents\Rainmeter\Skins`.
+Skins whose scripts are Python (`ScriptFile=*.py`) get their own folder, `~/RainTux/PythonSkins/`,
+so Rainmeter-format skins (INI + Lua) and Python skins are easy to tell apart; the installer puts
+each package in the right one. The first launch loads the bundled **RainTux** suite (Welcome,
+Clock, System, Network) and also installs **illustro** (RainTux edition), Rainmeter's classic
+starter suite adapted for Linux.
 
-### KDE Plasma (Wayland)
+### Editing skins
 
-KWin supports layer-shell for many widgets; use the same **gtk4-layer-shell** build. RainTux detects KDE via `XDG_CURRENT_DESKTOP` and may apply KDE-specific margin/anchor tweaks (see `raintux/wayland/kde_backend.py`).
+Just like in Rainmeter: right-click a skin and choose **Edit skin** to open its `.ini` in your
+text editor (the `editor` setting in `~/.config/raintux/config.toml`, else `$VISUAL`/`$EDITOR`,
+else your default app). Save, then right-click → **Refresh skin**. Skins are plain files, so you
+can copy, rename and extend them freely. For example, to show four drives in illustro's
+`Disk\2 Disks.ini`, copy the `measure…Disk2` and `meter…Disk2` sections, rename them `Disk3` and
+`Disk4`, move them down with new `Y=` values, and point each `diskN=` variable at a folder (`/`,
+`/home`, `/mnt/data`…). The HOWTO at the top of that file walks through it step by step.
 
-### GNOME (Wayland)
+## What is supported
 
-Mutter does **not** expose wlr-layer-shell to arbitrary clients. Phase 1 still runs as a transparent GTK window; for true desktop layering, install the future **raintux-helper** GNOME Shell extension (Phase 4) or use the documented XWayland fallback (`x11_fallback.py`).
+Practically everything a skin uses on Windows, implemented natively (details in
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)):
 
-## Paths (XDG)
+- **Syntax**: `@Include` (in place), `[Variables]` with `#Var#`, `#*Escapes*#`, built-ins
+  (`#CURRENTCONFIG#`, `#@#`, `#SKINSPATH#`, `#SCREENAREAWIDTH@2#`…), formulas in parentheses
+  (all Rainmeter operators and functions), `MeterStyle`, `DynamicVariables`, `UpdateDivider`,
+  `Group`, `Container`, `TransformationMatrix`, UTF-16 skins, case-insensitive Windows paths.
+- **Section variables**: `[Measure]`, `[Measure:]`, `[Measure:%]`, `[Measure:/1024,2]`,
+  `[Measure:MaxValue]`, `[Meter:X/Y/W/H/XW/YH]`, `[#Var]`, `[&Measure]`, `[&Script:Func()]`,
+  `[%ENV]`, `[$SkinX]`, `[$MouseX]`, `[\x263A]`, and `$MouseX$`/`$MouseY:%$` in mouse actions.
+- **Meters**: String (InlineSetting, ClipString, StringEffect, Angle, AccurateText), Image
+  (scaling modes, 9-slice, tile, crop, flip, rotate, tint, greyscale, ColorMatrix, MaskImageName),
+  Bar, Shape (rectangles, ellipses, lines, arcs, curves, paths, gradients, dashes, transforms,
+  Combine), Roundline, Rotator, Histogram, Line, Button, Bitmap, **TextEdit** and **Svg**.
+- **Measures**: CPU, PhysicalMemory/SwapMemory/Memory, FreeDiskSpace, NetIn/NetOut/NetTotal, Time,
+  Uptime, Calc, String, Loop, Script (**Lua**, with the SKIN/SELF API), WebParser, ActionTimer,
+  NowPlaying (any MPRIS player: Spotify, VLC, browsers…), Audio volume (PipeWire/PulseAudio),
+  AudioLevel (visualizers), Power (battery), SysInfo, Process, RunCommand, Ping, UsageMonitor,
+  WifiStatus, CoreTemp/SpeedFan, FolderInfo, FileView, Quote, RecycleManager (desktop trash),
+  InputText, Mouse, DragDrop, MediaKey — both `Measure=X` and the old `Plugin=X.dll` forms.
+- **Measure options**: MinValue/MaxValue, InvertMeasure, AverageSize, Substitute (also RegExp),
+  IfCondition/IfTrueAction/IfFalseAction, IfAbove/Below/Equal, IfMatch, OnChangeAction,
+  OnUpdateAction, Disabled/Paused.
+- **Bangs**: the full set, including `!SetOption`, `!SetVariable` (with formulas),
+  `!WriteKeyValue`, `!CommandMeasure`, `!Delay`, `!UpdateMeter *`, groups, `!ActivateConfig`,
+  `!LoadLayout`, `!Move`, `!ZPos`, `!SetTransparency`, `!ShowFade`, mouse-action
+  enable/disable, `!SetZoomFactor`, and current namespaced bangs like `!ActionTimer:Execute 1`,
+  `!TextEdit:Clear`, `!Skin:Load`, `Group=` targets.
+- **Window behaviour**: AlwaysOnTop levels (on desktop → stay topmost), click-through,
+  transparent pixels click through, draggable with snapping, keep on screen, fades,
+  multi-monitor positions, per-skin zoom.
 
-| Purpose | Path |
-|--------|------|
-| Skins | `~/RainTux/Skins/` |
-| Plugins | `~/RainTux/Plugins/` |
-| Config | `~/.config/raintux/config.toml` |
-| Logs / cache | `~/.local/share/raintux/` |
+Not possible on Linux: Windows-only plugin DLLs (packages that ship them still install; those
+measures return 0), `Measure=Registry`, `PerfMon`, `ResMon`, `WindowMessage`, desktop blur.
 
-On first run, minimal default config and example skin directories are created if missing.
+## Windows skins on Linux: what to expect
 
-## Skin Manager UI (`ui/`)
+`.rmskin` packages are made for Windows. RainTux translates what it can, so most skins work
+unchanged; where it can't, you may need to edit the skin (see [Editing skins](#editing-skins)).
 
-React + Vite app in **`ui/`**. Start the backend first, then:
+- **Drive letters.** `C:` means `/`. Other letters use `/mnt/<letter>` when it exists (that's
+  where WSL shows Windows drives), else the extra drives under `/media`, `/mnt` and `/run/media`
+  in order (`D:` is the first). To choose yourself, add a table to `~/.config/raintux/config.toml`:
+
+  ```toml
+  [drives]
+  D = "/home"
+  X = "/mnt/data"
+  ```
+
+  The numbers then come from the right place, but text the author typed (like a `C:\` label)
+  stays as written: edit the skin to show `/` instead.
+- **File paths.** Backslashes and any letter case work (`#@#Images\BG.PNG`); `%APPDATA%`,
+  `%USERPROFILE%` and similar point to Linux equivalents.
+- **Plugins (`.dll`).** These can't run on Linux. Common ones have built-in replacements
+  (NowPlaying via MPRIS, AudioLevel via PipeWire, WebParser, Power, SysInfo, RecycleManager via
+  the desktop Trash…); the rest give 0 or empty text, so those parts of a skin stay blank.
+- **Programs in click actions.** Links, files and folders open with your default apps, and
+  `explorer`/`notepad` open the file manager/text editor. Other Windows programs and settings
+  pages (`taskmgr.exe`, `shutdown.exe`, `control.exe`, `ms-settings:`, `shell:…`) don't exist on
+  Linux: change the action to a Linux command.
+- **Network adapters.** Windows adapter names don't exist here: use `Interface=0` (all) or a
+  Linux name such as `enp3s0` or `wlan0`.
+- **Process names.** `ProcessName=firefox.exe` matches `firefox`; programs that are named
+  differently on Linux need the Linux name.
+- **Fonts.** Windows fonts (Segoe UI, Trebuchet MS…) are replaced by similar free fonts; fonts a
+  skin ships in `@Resources/Fonts` are used as-is.
+- **Lua scripts.** They run as on Windows, but `os.execute`/`io.popen` calls to Windows commands
+  fail.
+- **Trash.** `EmptyBin` empties the desktop Trash right away, without the confirmation Windows
+  shows.
+- **Desktop.** On GNOME skins are normal windows (no desktop layer); "always on top" and
+  click-through depend on your compositor.
+
+## Compositors
+
+| Desktop | Result |
+|---------|--------|
+| Sway, Hyprland, river, Wayfire, niri, labwc, COSMIC, KDE Plasma (Wayland) | Full desktop widgets via **wlr-layer-shell** (on the desktop, below or above windows) |
+| GNOME (Wayland) | GNOME gives apps no desktop layer: skins appear as normal borderless windows. The tray icon needs the AppIndicator extension. |
+| X11 sessions | Runs as normal windows (positioning is up to the window manager) |
+
+RainTux re-launches itself once with `LD_PRELOAD` pointing at gtk4-layer-shell, which has to load
+before libwayland (opt out: `RAINTUX_NO_PRELOAD=1`). Programs launched by skins don't inherit it.
+
+## Command line
 
 ```bash
-cd ui && npm install && npm run dev
+raintux                              # start (or open Manage when already running)
+raintux --manage 'illustro\Clock'
+raintux ~/Downloads/some.rmskin      # install a package
+raintux '!ActivateConfig' 'illustro\Clock' 'Clock.ini'
+raintux '!SetVariable' Color '255,0,0' 'RainTux\Clock'
+raintux --refresh-all
 ```
 
-Defaults: API `http://127.0.0.1:7272` (`VITE_API_URL`), dev server **port 8080** (see `ui/vite.config.ts`). Details: `ui/README.md` and `docs/UI_BUILD_PROMPT.md`.
+## Files
 
-From the repo root on Unix-like shells: `make ui-dev`.
+| What | Where |
+|------|-------|
+| Skins (Rainmeter format: INI + Lua) | `~/RainTux/Skins/` (also `~/.local/share/raintux/skins`) |
+| Skins with Python scripts | `~/RainTux/PythonSkins/` |
+| Layouts | `~/RainTux/Layouts/<Name>/` |
+| Loaded skins and positions (Rainmeter.ini) | `~/.config/raintux/skins.json` |
+| Settings | `~/.config/raintux/config.toml` |
+| Downloads (WebParser, covers) | `~/.cache/raintux/` |
 
-## API (Phase 1)
+## Local API and web Skin Manager
 
-Local **FastAPI** server listens on `127.0.0.1:7272` (configurable in `config.toml`):
+A small API on `127.0.0.1:7272` (toggle in Manage → Settings) lets scripts and the optional web
+Skin Manager in `ui/` drive RainTux: `GET /skins`, `GET /skins/active`,
+`POST /skins/{id}/load|unload|refresh`, `GET|PUT /skins/{id}/config`, `POST /bang`
+(`{"bang": "!Refresh illustro\\Clock"}`), `GET /system/status`, `WS /ws`.
+Run the web UI with `cd ui && npm install && npm run dev`.
 
-- `GET /skins` — installed skins
-- `GET /skins/active` — loaded skins
-- `POST /skins/{id}/load` | `/unload` | `/refresh`
-- `GET|PUT /skins/{id}/config`
-- `GET /system/status`
-- `WS /ws` — live events (stub stream in Phase 1)
+## Development
 
-## Phase status
+```bash
+python -m pytest            # 150+ tests; they run without a display (GTK-free core)
+RAINTUX_DEV=1 python -m raintux
+```
 
-- **Phase 1:** Compositor detection, layered GTK window (gtk4-layer-shell when available), basic `.ini` parser, CPU/RAM/Time/Disk measures, String/Image/Shape/Bar meters, FastAPI skeleton.
-- **Phase 2–4:** See project brief in the repository docs / source TODOs.
+The core (`raintux/core`, `raintux/measures`, `raintux/meters`) has no GTK dependency; the desktop
+side (`raintux/core/engine.py`, `raintux/wayland`, `raintux/gui`) implements the `SkinHost`
+interface. `tests/helpers.py` loads skins headlessly for tests.
 
-## License
+New to the code? [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) walks through how a skin is loaded,
+updated and drawn, and where to add a measure, meter, plugin or bang.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers setup, tests (also from Windows through WSL) and
+licensing of contributions.
 
-MIT
+## License and credits
+
+RainTux is free software under the **GNU General Public License, version 2 or later**
+([LICENSE](LICENSE)), the same license family as Rainmeter. Copyright (C) 2026 Viktor_Hashmat
+and RainTux contributors.
+
+RainTux exists because of **[Rainmeter](https://rainmeter.net)** by the Rainmeter team: it reads
+Rainmeter's skin format, and Rainmeter's GPL source was the reference for how options, bangs,
+measures, meters and the Lua API behave. RainTux is a separate program written for Linux and is
+not affiliated with or endorsed by the Rainmeter team. See [NOTICE](NOTICE) for all credits.
+
+Bundled skins keep their own licenses: the **RainTux** suite is MIT, so skin authors can reuse it
+freely; **illustro** (RainTux edition) is an adaptation of illustro by poiru, under
+[CC BY-NC-SA 3.0](raintux/data/skins/illustro/LICENSE.txt), and is not covered by the GPL.

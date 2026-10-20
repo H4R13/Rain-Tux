@@ -1,35 +1,32 @@
-"""Physical RAM / swap usage via psutil."""
+"""``Measure=PhysicalMemory`` / ``SwapMemory`` / ``Memory`` — bytes used (``Total=1``: total)."""
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-
 import psutil
 
-from raintux.measures.base_measure import BaseMeasure
+from raintux.measures.base_measure import Measure
 
 
-class RamMeasure(BaseMeasure):
-    """``Type=Memory`` or ``Type=Swap`` style metrics."""
+class RamMeasure(Measure):
+    """Rainmeter reports bytes, with MaxValue set to the total, so ``Percentual=1`` works."""
 
-    def __init__(self, *, name: str, section: dict[str, str], skin_root: Path, interval_ms: int) -> None:
-        super().__init__(name=name, section=section, skin_root=skin_root, interval_ms=interval_ms)
-        cf = {k.lower(): v for k, v in section.items()}
-        mtype = (cf.get("type") or "").lower()
-        self._swap = "swap" in mtype
+    def read_measure(self) -> None:
+        self.mtype = self.get("measure", self.get("type")).strip().lower()
+        self.total = self.get_bool("total")
 
-    async def _poll(self) -> float:
-        def read() -> float:
-            if self._swap:
-                s = psutil.swap_memory()
-                return float(s.percent)
-            m = psutil.virtual_memory()
-            return float(m.percent)
+    def _usage(self) -> tuple[float, float]:
+        if self.mtype in ("swapmemory", "swap"):
+            s = psutil.swap_memory()
+            return float(s.used), float(s.total)
+        vm = psutil.virtual_memory()
+        if self.mtype == "memory":
+            # Windows "commit charge" ~ RAM in use plus swap in use.
+            s = psutil.swap_memory()
+            return float(vm.total - vm.available + s.used), float(vm.total + s.total)
+        return float(vm.total - vm.available), float(vm.total)
 
-        return await asyncio.to_thread(read)
-
-    def display_string(self) -> str:
-        if self._value is None:
-            return "0"
-        return f"{float(self._value):.0f}"
+    def update_value(self) -> None:
+        used, total = self._usage()
+        if not self.has("maxvalue"):
+            self.max_value = total
+        self._raw_number = total if self.total else used

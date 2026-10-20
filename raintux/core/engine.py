@@ -1,194 +1,1136 @@
-"""GTK application + asyncio measure loop + skin runtimes."""
+"""GTK application: active skins, their windows and timers, bangs that act on the desktop."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
+import os
+import re
+import shutil
+import subprocess
 import threading
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, TypeVar
 
 import gi
 
 gi.require_version("Gtk", "4.0")
-gi.require_version("Pango", "1.0")
-gi.require_version("PangoCairo", "1.0")
-from gi.repository import Gio, Gtk
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, Gio, GLib, Gtk
 
+from raintux.core.bangs import split_args, split_commands
 from raintux.core.config import RainTuxConfig, default_skins_roots, load_config
-from raintux.core.event_bus import EventBus
-from raintux.core.measure_manager import MeasureManager
-from raintux.core.meter_renderer import compute_layout, render_skin
-from raintux.core.skin_parser import parse_skin_ini
-from raintux.wayland.compositor_detect import CompositorKind, detect_compositor
-from raintux.wayland.gnome_backend import create_gnome_overlay
-from raintux.wayland.kde_backend import create_kde_overlay
-from raintux.wayland.wlr_backend import create_overlay_window
+from raintux.core.formula import parse_number
+from raintux.core.position import Rect, anchor_offset, apply_skin_defaults, authored_position, layer_for_zpos
+from raintux.core.skin import Skin
+from raintux.core.stacking import restack_plan
+from raintux.core.state import AppState, load_state, save_state
+from raintux.measures.disk_measure import set_drive_map
+from raintux.wayland.compositor_detect import CompositorKind, detect_compositor, new_layer_surfaces_on_top
+from raintux.wayland.layer_window import CaptureOverlay, SkinWindow, monitor_at, monitors
 
 log = logging.getLogger(__name__)
 
+_T = TypeVar("_T")
+DEFAULT_LAYOUT = [  # first launch: (config, file, column); the right column stacks top to bottom
+    (r"RainTux\Welcome", "Welcome.ini", "center"),
+    (r"RainTux\Clock", "Clock.ini", "right"),
+    (r"RainTux\System", "System.ini", "right"),
+    (r"RainTux\Network", "Network.ini", "right"),
+]
+# Bangs from outside (command line, API) that act on the app, on configs by name or on groups.
+_APP_BANGS = frozenset({
+    "refreshapp", "quit", "restart", "manage", "about", "debug", "traymenu", "setclip", "loadlayout",
+    "activateconfig", "toggleconfig", "deactivateconfiggroup", "refreshgroup",
+    "showgroup", "hidegroup", "togglegroup", "showfadegroup", "hidefadegroup", "togglefadegroup",
+    "updategroup", "redrawgroup", "disablemouseactionskingroup", "enablemouseactionskingroup",
+    "togglemouseactionskingroup", "clearmouseactionskingroup",
+})
 
-def _skin_bounds(layouts: list[Any]) -> tuple[int, int]:
-    if not layouts:
-        return 320, 120
-    r = max(l.x + max(1, l.w) for l in layouts)
-    b = max(l.y + max(1, l.h) for l in layouts)
-    return max(160, r + 8), max(64, b + 8)
+
+def _on_main_thread(fn: Callable[..., _T], *args: Any, timeout: float = 30.0) -> _T:
+    """Run ``fn`` on the GTK main loop and wait for its result (direct call if already there)."""
+    if GLib.MainContext.default().is_owner():
+        return fn(*args)
+    done = threading.Event()
+    box: dict[str, Any] = {}
+
+    def _run() -> bool:
+        try:
+            box["result"] = fn(*args)
+        except BaseException as e:  # re-raised in the calling thread
+            box["error"] = e
+        finally:
+            done.set()
+        return GLib.SOURCE_REMOVE
+
+    GLib.idle_add(_run)
+    if not done.wait(timeout):
+        raise TimeoutError(f"GTK main loop did not run {getattr(fn, '__name__', fn)}")
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
 
 
-@dataclass
-class SkinRuntime:
-    """One loaded skin: parsed INI, window, layout cache."""
+class ActiveSkin:
+    """Bookkeeping for one active config (API-compatible: ``ini_path``)."""
 
-    skin_id: str
-    ini_path: Path
-    parsed: Any
-    window: Gtk.ApplicationWindow
-    layouts: list[Any] = field(default_factory=list)
+    def __init__(self, skin: Skin, window: SkinWindow) -> None:
+        self.skin = skin
+        self.window = window
+        self.timer = 0
+        self.size: tuple[int, int] | None = None  # skin size when it was last placed
+
+    @property
+    def ini_path(self) -> Path:
+        return self.skin.ini_path
 
 
 class RainTuxEngine:
-    """Coordinates skins, measures, and drawing."""
+    """Owns every active skin and implements :class:`~raintux.core.skin.SkinHost`."""
 
     def __init__(self, config: RainTuxConfig, app: Gtk.Application) -> None:
         self.config = config
+        set_drive_map(config.drives)  # Windows drive letters in skins -> the user's folders
         self.app = app
-        self.event_bus = EventBus()
-        self.measure_manager = MeasureManager(self.event_bus, config.engine.default_update_ms)
-        self.skins: dict[str, SkinRuntime] = {}
+        self.state: AppState = load_state()
+        self.active: dict[str, ActiveSkin] = {}  # lower-case config -> skin
         self._compositor = detect_compositor()
-        self._async_loop: asyncio.AbstractEventLoop | None = None
-        self._async_thread: threading.Thread | None = None
+        self._manage_window: Any = None
+        self._save_source = 0
+        self.tray: Any = None
+        # Skin windows of each layer-shell layer, bottom first, as the compositor stacks them.
+        self._stacks: dict[str, list[SkinWindow]] = {}
+        self._new_on_top = new_layer_surfaces_on_top()
+        self._restack_source = 0
 
     @property
     def compositor(self) -> CompositorKind:
         return self._compositor
 
-    def start_background_loop(self) -> None:
-        """Start a dedicated asyncio event loop thread for measures."""
-        if self._async_thread and self._async_thread.is_alive():
-            return
-        ready = threading.Event()
+    # ------------------------------------------------------------------ skin discovery
+    def roots(self) -> list[Path]:
+        roots = [Path(r).expanduser() for r in self.config.engine.skins_roots]
+        return roots + [b for b in default_skins_roots() if b not in roots]
 
-        def runner() -> None:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            self._async_loop = loop
-            self.measure_manager.attach_loop(loop)
-            ready.set()
-            loop.run_forever()
+    def primary_root(self) -> Path:
+        root = self.roots()[0]
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
-        self._async_thread = threading.Thread(target=runner, name="raintux-async", daemon=True)
-        self._async_thread.start()
-        ready.wait(timeout=5.0)
-
-    def shutdown(self) -> None:
-        """Cancel measure tasks and stop the asyncio loop."""
-        if self._async_loop and self._async_loop.is_running():
-            self._async_loop.call_soon_threadsafe(self._async_loop.stop)
-        if self._async_thread:
-            self._async_thread.join(timeout=2.0)
-
-    def _new_overlay(self, title: str, width: int, height: int, skin_id: str) -> Any:
-        if self._compositor == CompositorKind.KDE:
-            return create_kde_overlay(self.app, title=title, width=width, height=height, skin_id=skin_id)
-        if self._compositor == CompositorKind.GNOME:
-            return create_gnome_overlay(self.app, title=title, width=width, height=height, namespace=skin_id[:64])
-        return create_overlay_window(self.app, title=title, width=width, height=height, skin_id=skin_id)
-
-    def _notify_redraw_factory(self, runtime: SkinRuntime) -> Callable[[], None]:
-        def _notify() -> None:
-            def _idle() -> None:
-                runtime.window.invalidate()
-
-            GLib = gi.repository.GLib
-            GLib.idle_add(_idle)
-
-        return _notify
-
-    def load_skin(self, skin_id: str, ini_path: Path | None = None) -> None:
-        """Load a skin by id (relative path) or explicit ``.ini`` path."""
-        path = ini_path or self.resolve_ini(skin_id)
-        if not path or not path.is_file():
-            raise FileNotFoundError(skin_id)
-        skin_key = skin_id
-        parsed = parse_skin_ini(path)
-        layouts = compute_layout(parsed)
-        w, h = _skin_bounds(layouts)
-        win = self._new_overlay(title=skin_key, width=w, height=h, skin_id=skin_key)
-        runtime = SkinRuntime(skin_id=skin_key, ini_path=path, parsed=parsed, window=win, layouts=layouts)
-
-        def draw(cr: Any) -> None:
-            import cairo as _cairo
-
-            def gm(name: str) -> str:
-                return self.measure_manager.get_display_value(skin_key, name.strip())
-
-            cr.save()
-            cr.set_operator(_cairo.OPERATOR_CLEAR)
-            cr.paint()
-            cr.restore()
-            render_skin(cr, parsed, gm, layouts=layouts)
-
-        win.set_draw_callback(draw)
-        win.resize_canvas(w, h)
-        win.present()
-        self.skins[skin_key] = runtime
-        notify = self._notify_redraw_factory(runtime)
-        self.measure_manager.load_skin_measures_threadsafe(skin_key, parsed, notify)
-        log.info("loaded skin %s from %s", skin_key, path)
-
-    def unload_skin(self, skin_id: str) -> None:
-        rt = self.skins.pop(skin_id, None)
-        if not rt:
-            return
-        rt.window.close()
-        if self._async_loop:
-            self._async_loop.call_soon_threadsafe(lambda: self.measure_manager.clear_skin(skin_id))
-
-    def reload_skin(self, skin_id: str) -> None:
-        if skin_id not in self.skins:
-            self.load_skin(skin_id)
-            return
-        rt = self.skins.pop(skin_id)
-        rt.window.close()
-        self.load_skin(skin_id, rt.ini_path)
-
-    def resolve_ini(self, skin_id: str) -> Path | None:
-        """Locate ``skin_id`` under configured roots (first match)."""
-        sid = skin_id.replace("\\", "/").strip("/")
-        for root in self.config.engine.skins_roots:
-            base = Path(root).expanduser()
-            cand = base / sid
-            if cand.is_file() and cand.suffix.lower() == ".ini":
-                return cand
-            if (cand / "skin.ini").is_file():
-                return cand / "skin.ini"
-        for base in default_skins_roots():
-            cand = base / sid
-            if cand.is_file() and cand.suffix.lower() == ".ini":
-                return cand
-            if (cand / "skin.ini").is_file():
-                return cand / "skin.ini"
+    def find_config_dir(self, config: str) -> tuple[Path, Path] | None:
+        """(skins root, config folder) for ``config`` like ``illustro\\Clock``."""
+        rel = config.replace("\\", "/").strip("/")
+        if not rel:
+            return None
+        for base in self.roots():
+            try:
+                base_r = base.resolve()
+            except OSError:
+                continue
+            cand = (base / rel).resolve()
+            if cand.is_relative_to(base_r) and cand.is_dir():
+                return base_r, cand
         return None
 
-    def list_installed_skins(self) -> list[dict[str, str]]:
-        """Enumerate ``.ini`` files discovered under skin roots."""
-        seen: set[str] = set()
-        rows: list[dict[str, str]] = []
-        roots = [Path(p).expanduser() for p in self.config.engine.skins_roots] or default_skins_roots()
-        for base in roots:
+    def list_configs(self) -> dict[str, list[str]]:
+        """``{config: [ini files]}`` for every folder with skins (``@Resources`` skipped)."""
+        out: dict[str, list[str]] = {}
+        for base in self.roots():
             if not base.is_dir():
                 continue
-            for ini in base.rglob("*.ini"):
-                rel = ini.relative_to(base).as_posix()
-                if rel in seen:
+            for ini in sorted(base.rglob("*.ini"), key=lambda p: str(p).lower()):
+                rel = ini.relative_to(base)
+                if any(p.startswith("@") for p in rel.parts[:-1]) or len(rel.parts) < 2:
                     continue
-                seen.add(rel)
-                rows.append({"id": rel, "path": str(ini.resolve())})
-        rows.sort(key=lambda r: r["id"].lower())
+                config = "\\".join(rel.parts[:-1])
+                if config.lower() in (c.lower() for c in out) and config not in out:
+                    continue
+                out.setdefault(config, []).append(ini.name)
+        return dict(sorted(out.items(), key=lambda kv: kv[0].lower()))
+
+    def list_installed_skins(self) -> list[dict[str, str]]:
+        rows = []
+        for config, files in self.list_configs().items():
+            found = self.find_config_dir(config)
+            for f in files:
+                rows.append({"id": config.replace("\\", "/") + "/" + f, "path": str(found[1] / f) if found else ""})
         return rows
+
+    def resolve_ini(self, skin_id: str) -> Path | None:
+        """``Config/File.ini`` (or a folder with one .ini) under the skin roots; never outside them."""
+        sid = skin_id.replace("\\", "/").strip("/")
+        for base in self.roots():
+            try:
+                base_r = base.resolve()
+            except OSError:
+                continue
+            cand = (base / sid).resolve()
+            if not cand.is_relative_to(base_r):
+                log.warning("rejected skin id outside %s: %r", base, skin_id)
+                continue
+            if cand.is_file() and cand.suffix.lower() == ".ini":
+                return cand
+            if cand.is_dir():
+                inis = sorted(cand.glob("*.ini"))
+                if inis:
+                    return inis[0]
+        return None
+
+    def _split_id(self, ini: Path) -> tuple[str, Path]:
+        for base in self.roots():
+            try:
+                rel = ini.resolve().relative_to(base.resolve())
+            except (ValueError, OSError):
+                continue
+            return "\\".join(rel.parts[:-1]), base.resolve()
+        return ini.parent.name, ini.parent.parent
+
+    # ------------------------------------------------------------------ activation
+    def activate_config(self, config: str, file: str | None = None) -> Skin:
+        found = self.find_config_dir(config)
+        if found is None:
+            raise FileNotFoundError(config)
+        root, folder = found
+        first_run = not self.state.has(config)
+        if file is None:
+            cs = self.state.config(config)
+            file = cs.active_file or (sorted(p.name for p in folder.glob("*.ini")) or [None])[0]
+        if file is None:
+            raise FileNotFoundError(config)
+        ini = (folder / file).resolve()
+        if not ini.is_relative_to(folder) or not ini.is_file():
+            raise FileNotFoundError(f"{config}\\{file}")
+        return self._activate(ini, root, first_run)
+
+    def _activate(self, ini: Path, root: Path, first_run: bool | None = None) -> Skin:
+        config, _ = self._split_id(ini)
+        key = config.lower()
+        if first_run is None:
+            first_run = not self.state.has(config)
+        cs = self.state.config(config)
+        existing = self.active.get(key)
+        if existing is not None:
+            self._stop(existing)
+        skin = Skin(ini, config=config, host=self, skins_root=root, state=cs.window)
+        try:
+            skin.load()
+            self._register_fonts(skin)
+        except Exception:
+            log.exception("could not load %s", ini)
+            if existing is not None:
+                existing.window.destroy()
+                self.active.pop(key, None)
+            raise
+        if first_run:
+            apply_skin_defaults(cs.window, skin.rm.option_raw, self._monitor_rects(), skin.resolve)
+        if existing is not None:
+            window = existing.window
+            window.set_skin(skin)
+        else:
+            window = SkinWindow(self, skin)
+            window.connect("map", self._window_mapped)
+            window.connect("unmap", self._window_unmapped)
+        act = ActiveSkin(skin, window)
+        self.active[key] = act
+        cs.active_file = ini.name
+        skin.start()
+        # Like Rainmeter's refresh: WindowX / WindowY formulas are worked out once the skin's
+        # first update has given it its size (AnchorX=50% needs it).
+        self._place_from_options(act)
+        act.size = (skin.width, skin.height)
+        window.apply_state()
+        window.present()
+        if existing is None and cs.window.fade_duration > 0 and cs.window.alpha > 0:
+            window.set_opacity(0.0)
+            window.fade_to(cs.window.alpha / 255.0, cs.window.fade_duration)
+        self._schedule(act)
+        self.schedule_save()
+        self._changed()
+        self.schedule_restack()
+        log.info("activated %s (%s)", config, ini.name)
+        return skin
+
+    def _schedule(self, act: ActiveSkin) -> None:
+        if act.timer:
+            GLib.source_remove(act.timer)
+            act.timer = 0
+        ms = act.skin.update_ms
+        if ms <= 0:
+            return
+        interval = max(16, int(ms))
+
+        def tick() -> bool:
+            if act.skin.closed:
+                act.timer = 0
+                return GLib.SOURCE_REMOVE
+            try:
+                act.skin.update()
+            except Exception:
+                log.exception("update of %s failed", act.skin.config)
+            if act.skin.update_ms != interval:
+                self._schedule(act)
+                return GLib.SOURCE_REMOVE
+            return GLib.SOURCE_CONTINUE
+
+        act.timer = GLib.timeout_add(interval, tick)
+
+    def _stop(self, act: ActiveSkin) -> None:
+        if act.timer:
+            GLib.source_remove(act.timer)
+            act.timer = 0
+        try:
+            act.skin.close()
+        except Exception:
+            log.exception("closing %s", act.skin.config)
+
+    def deactivate_config(self, config: str) -> None:
+        """Unload a config. As Skin::Deactivate, it is gone at once (an action can load it again
+        right after) and stops updating; the skin closes (OnCloseAction, measures) once the
+        current action is over, so a skin can unload itself from its own action or script."""
+        act = self.active.pop(config.replace("/", "\\").lower(), None)
+        if act is None:
+            return
+        if act.timer:
+            GLib.source_remove(act.timer)
+            act.timer = 0
+        GLib.idle_add(lambda: (self._stop(act), GLib.SOURCE_REMOVE)[1])
+        self.state.config(act.skin.config).active_file = None
+        fade = act.skin.state.fade_duration
+        act.window.fade_to(0.0, fade, then=act.window.destroy)
+        self.schedule_save()
+        self._changed()
+        if self._manage_window is not None:
+            self._manage_window.refresh()
+
+    def refresh_config(self, config: str) -> None:
+        act = self.active.get(config.replace("/", "\\").lower())
+        if act is None:
+            return
+        self._activate(act.skin.ini_path, act.skin.skins_root)
+
+    def refresh_all(self) -> None:
+        for act in list(self.active.values()):
+            self.refresh_config(act.skin.config)
+
+    # ------------------------------------------------------------------ layouts
+    def list_layouts(self) -> list[str]:
+        from raintux.core.config import layouts_root
+        from raintux.core.layouts import list_layouts
+
+        return list_layouts(layouts_root())
+
+    def save_layout(self, name: str) -> None:
+        from raintux.core.config import layouts_root
+        from raintux.core.layouts import save_layout
+
+        save_layout(layouts_root(), name, self.state)
+        self._changed()
+
+    def load_layout(self, name: str) -> None:
+        """Replace the loaded skins with a layout (``!LoadLayout``)."""
+        from raintux.core.config import layouts_root
+        from raintux.core.layouts import read_layout
+
+        try:
+            configs = read_layout(layouts_root(), name, lambda c: self.list_configs().get(c.replace("/", "\\"), []),
+                                  self._monitor_rects())
+        except (FileNotFoundError, ValueError, OSError) as e:
+            log.warning("cannot load layout %s: %s", name, e)
+            return
+        for act in list(self.active.values()):
+            self.deactivate_config(act.skin.config)
+        for cfg, cs in self._creation_order(list(configs.items())):
+            mine = self.state.config(cfg)
+            mine.window = cs.window
+            mine.load_order = cs.load_order
+            self._safe_activate(cfg, cs.active_file)
+        self._changed()
+
+    def _changed(self) -> None:
+        """Skins or layouts changed: refresh the tray menu and the Manage window."""
+        if self.tray is not None:
+            try:
+                self.tray.rebuild()
+            except Exception:
+                log.debug("tray rebuild failed", exc_info=True)
+
+    # API compatibility (called from FastAPI worker threads).
+    @property
+    def skins(self) -> dict[str, ActiveSkin]:
+        out = {}
+        for act in self.active.values():
+            out[act.skin.config.replace("\\", "/") + "/" + act.skin.ini_path.name] = act
+        return out
+
+    def active_list_threadsafe(self) -> list[dict[str, str]]:
+        return _on_main_thread(lambda: [{"id": k, "path": str(v.ini_path)} for k, v in self.skins.items()])
+
+    def load_skin(self, skin_id: str, ini_path: Path | None = None) -> None:
+        def go() -> None:
+            ini = ini_path or self.resolve_ini(skin_id)
+            if ini is None or not ini.is_file():
+                raise FileNotFoundError(skin_id)
+            _config, root = self._split_id(ini)
+            self._activate(ini, root)
+
+        _on_main_thread(go)
+
+    def unload_skin(self, skin_id: str) -> None:
+        def go() -> None:
+            ini = self.resolve_ini(skin_id)
+            config = self._split_id(ini)[0] if ini else skin_id.replace("/", "\\").rsplit("\\", 1)[0]
+            self.deactivate_config(config)
+
+        _on_main_thread(go)
+
+    def reload_skin(self, skin_id: str) -> None:
+        def go() -> None:
+            ini = self.resolve_ini(skin_id)
+            if ini is None:
+                raise FileNotFoundError(skin_id)
+            config, root = self._split_id(ini)
+            if config.lower() in self.active:
+                self.refresh_config(config)
+            else:
+                self._activate(ini, root)
+
+        _on_main_thread(go)
+
+    def apply_window_settings(self, skin_id: str, x: int | None, y: int | None, alpha: float | None,
+                              click_through: bool | None) -> bool:
+        def go() -> bool:
+            ini = self.resolve_ini(skin_id)
+            act = self.active.get(self._split_id(ini)[0].lower()) if ini else None
+            if act is None:
+                return False
+            st = act.skin.state
+            if x is not None or y is not None:
+                act.window.move_to(st.x if x is None else x, st.y if y is None else y)
+                st.window_x = st.window_y = None
+            if alpha is not None:
+                st.alpha = int(max(0.0, min(1.0, alpha)) * 255)
+            if click_through is not None:
+                st.click_through = click_through
+            act.window.apply_state()
+            self.schedule_save()
+            return True
+
+        return _on_main_thread(go)
+
+    # ------------------------------------------------------------------ startup / shutdown
+    def start(self) -> None:
+        install_default_skins(self.primary_root())
+        if self.config.ui.tray:
+            try:
+                from raintux.gui.tray import Tray
+
+                self.tray = Tray(self)
+            except Exception:
+                log.info("tray icon unavailable", exc_info=True)
+        active = self.state.active()
+        if not active and not self.state.first_run_done:
+            self._activate_default_layout()
+        else:
+            for config, cs in self._creation_order(active):
+                try:
+                    self.activate_config(config, cs.active_file)
+                except Exception:
+                    log.exception("could not activate %s", config)
+        self.state.first_run_done = True
+        self.schedule_save()
+        display = Gdk.Display.get_default()
+        if display is not None:
+            display.get_monitors().connect("items-changed", lambda *_a: GLib.timeout_add(
+                500, lambda: (self._monitors_changed(), GLib.SOURCE_REMOVE)[1]))
+
+    def _monitors_changed(self) -> None:
+        """A screen was added/removed: re-place every skin (keep-on-screen ones come back into view)."""
+        for act in self.active.values():
+            act.skin.invalidate_builtins()
+            st = act.skin.state
+            x, y = (self.clamp_on_screen(act.window, st.x, st.y) if st.keep_on_screen else (st.x, st.y))
+            act.window.move_to(x, y)
+
+    def _activate_default_layout(self) -> None:
+        mons = monitors()
+        g = mons[0].get_geometry() if mons else None
+        sw, sh = (g.width, g.height) if g else (1920, 1080)
+        ox, oy = (g.x, g.y) if g else (0, 0)
+        next_y = oy + 40
+        for config, file, column in DEFAULT_LAYOUT:
+            if self.find_config_dir(config) is None:
+                continue
+            try:
+                skin = self.activate_config(config, file)
+            except Exception:
+                log.exception("default skin %s", config)
+                continue
+            act = self.active[config.lower()]
+            if column == "center":
+                act.window.move_to(ox + (sw - skin.width) // 2, oy + (sh - skin.height) // 2)
+            else:
+                act.window.move_to(ox + sw - skin.width - 40, next_y)
+                next_y += skin.height + 16
+            self.window_moved(act.window)
+
+    def shutdown(self) -> None:
+        for act in list(self.active.values()):
+            self._stop(act)
+        self.save_now()
+
+    def schedule_save(self) -> None:
+        if self._save_source:
+            return
+
+        def go() -> bool:
+            self._save_source = 0
+            self.save_now()
+            return GLib.SOURCE_REMOVE
+
+        self._save_source = GLib.timeout_add(500, go)
+
+    def save_now(self) -> None:
+        try:
+            save_state(self.state)
+        except OSError:
+            log.exception("could not save skin state")
+
+    # ------------------------------------------------------------------ fonts
+    def _register_fonts(self, skin: Skin) -> None:
+        from raintux.gui.fonts import register_skin_fonts
+
+        try:
+            register_skin_fonts(skin)
+        except Exception:
+            log.debug("font registration failed", exc_info=True)
+
+    # ------------------------------------------------------------------ SkinHost
+    def _act(self, skin: Skin) -> ActiveSkin | None:
+        act = self.active.get(skin.config.lower())
+        return act if act is not None and act.skin is skin else None
+
+    def redraw(self, skin: Skin) -> None:
+        act = self._act(skin)
+        if act is not None:
+            act.window.redraw()
+
+    def resize(self, skin: Skin, width: int, height: int) -> None:
+        act = self._act(skin)
+        if act is not None:
+            act.window.resize_canvas(width, height)
+            self._resized(act, width, height)
+
+    def call_later(self, ms: int, fn: Callable[[], None]) -> Any:
+        def run() -> bool:
+            try:
+                fn()
+            except Exception:
+                log.exception("timer callback failed")
+            return GLib.SOURCE_REMOVE
+
+        return GLib.timeout_add(max(0, int(ms)), run)
+
+    def cancel(self, handle: Any) -> None:
+        if handle:
+            try:
+                GLib.source_remove(handle)
+            except Exception:
+                pass
+
+    def call_soon(self, fn: Callable[[], None]) -> None:
+        def run() -> bool:
+            try:
+                fn()
+            except Exception:
+                log.exception("deferred callback failed")
+            return GLib.SOURCE_REMOVE
+
+        GLib.idle_add(run)
+
+    def find_skin(self, config: str) -> Skin | None:
+        act = self.active.get(config.replace("/", "\\").strip().lower())
+        return act.skin if act else None
+
+    def screen_variables(self, skin: Skin) -> dict[str, str]:
+        mons = monitors()
+        out: dict[str, str] = {}
+        if not mons:
+            return out
+        geos = [m.get_geometry() for m in mons]
+        cur = monitor_at(skin.state.x + 1, skin.state.y + 1)
+        cg = cur.get_geometry() if cur is not None else geos[0]
+
+        def put(prefix: str, g: Any, suffix: str = "") -> None:
+            out[f"{prefix}X{suffix}"] = str(g.x)
+            out[f"{prefix}Y{suffix}"] = str(g.y)
+            out[f"{prefix}WIDTH{suffix}"] = str(g.width)
+            out[f"{prefix}HEIGHT{suffix}"] = str(g.height)
+
+        for prefix in ("SCREENAREA", "WORKAREA"):
+            put(prefix, cg)
+            put("P" + prefix, geos[0])
+            for i, g in enumerate(geos, start=1):
+                put(prefix, g, f"@{i}")
+        vx = min(g.x for g in geos)
+        vy = min(g.y for g in geos)
+        vw = max(g.x + g.width for g in geos) - vx
+        vh = max(g.y + g.height for g in geos) - vy
+        for prefix in ("VSCREENAREA",):
+            out.update({f"{prefix}X": str(vx), f"{prefix}Y": str(vy), f"{prefix}WIDTH": str(vw), f"{prefix}HEIGHT": str(vh)})
+        return out
+
+    def set_pointer(self, skin: Skin, cursor: str | None, tooltip: str | None) -> None:
+        act = self._act(skin)
+        if act is None:
+            return
+        area = act.window.area
+        if cursor and cursor.startswith("file:"):
+            area.set_cursor(_file_cursor(cursor[5:]))
+        elif cursor:
+            area.set_cursor_from_name(cursor)
+        else:
+            area.set_cursor(None)
+        if (area.get_tooltip_text() or None) != tooltip:
+            area.set_tooltip_text(tooltip)
+
+    def all_skins(self) -> list[Skin]:
+        return [a.skin for a in self.active.values()]
+
+    def set_keyboard_focus(self, skin: Skin, want: bool) -> None:
+        act = self._act(skin)
+        if act is not None:
+            act.window.set_keyboard(want)
+
+    def clipboard_set(self, text: str) -> None:
+        display = Gdk.Display.get_default()
+        if display is not None:
+            display.get_clipboard().set(text)
+
+    def clipboard_get(self, callback: Callable[[str], Any]) -> None:
+        display = Gdk.Display.get_default()
+        if display is None:
+            return
+        cb = display.get_clipboard()
+
+        def done(c: Any, res: Gio.AsyncResult) -> None:
+            try:
+                text = c.read_text_finish(res)
+            except GLib.Error:
+                text = None
+            if text:
+                callback(text)
+
+        cb.read_text_async(None, done)
+
+    def start_mouse_capture(self, skin: Skin, measure: Any) -> None:
+        self._captures = getattr(self, "_captures", {})
+        self._captures[id(measure)] = CaptureOverlay(self.app, skin, measure)
+
+    def stop_mouse_capture(self, skin: Skin, measure: Any) -> None:
+        ov = getattr(self, "_captures", {}).pop(id(measure), None)
+        if ov is not None:
+            ov.destroy()
+
+    def ask_text(self, skin: Skin, rect: tuple[float, float, float, float], style: dict[str, Any], default: str,
+                 password: bool, callback: Callable[[str | None], None]) -> None:
+        from raintux.gui.input_popup import ask_text
+
+        ask_text(self.app, skin, rect, style, default, password, callback)
+
+    def confirm(self, skin: Skin, title: str, message: str, action: str, callback: Callable[[bool], None]) -> None:
+        """Ask before something that cannot be undone (EmptyBin); Cancel is the default answer."""
+        dialog = Gtk.AlertDialog(message=title, detail=message, buttons=["Cancel", action], cancel_button=0,
+                                 default_button=0, modal=True)
+
+        def done(d: Gtk.AlertDialog, res: Gio.AsyncResult) -> None:
+            try:
+                ok = d.choose_finish(res) == 1
+            except GLib.Error:
+                ok = False
+            callback(ok)
+
+        dialog.choose(None, None, done)
+
+    def run_command(self, skin: Skin, command: str) -> None:
+        """Run a non-bang action: URLs and files open with the default app, programs start detached."""
+        args = split_args(command)
+        if not args:
+            return
+        prog = args[0].strip()
+        low = prog.lower()
+        if low.replace("\\", "/").rsplit("/", 1)[-1] == "rainmeter.exe":
+            if len(args) > 1:
+                self.execute_global(" ".join(_quote(a) for a in args[1:]))
+            return
+        from raintux.compat.shell import translate
+
+        action = translate(args, skin.path)
+        if action is not None:
+            self._run_windows_action(skin, action, command)
+            return
+        try:
+            if re.match(r"^[a-z][a-z0-9+.\-]*:(//)?", low) and not re.match(r"^[a-z]:[\\/]", low):
+                Gio.AppInfo.launch_default_for_uri(prog, None)
+                return
+            path = skin.path(prog)
+            if path.exists() and not (path.is_file() and os.access(path, os.X_OK)):
+                Gio.AppInfo.launch_default_for_uri(path.as_uri(), None)
+                return
+            exe = shutil.which(prog) or (str(path) if path.is_file() and os.access(path, os.X_OK) else None)
+            if exe is None:
+                log.warning("[%s] cannot run %r (not found on this system)", skin.config, prog)
+                return
+            subprocess.Popen([exe, *args[1:]], cwd=str(skin.root), start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            log.exception("[%s] command failed: %s", skin.config, command)
+
+    def write_setting(self, section: str, key: str, value: str) -> None:
+        """!WriteKeyValue into #SETTINGSPATH#Rainmeter.ini: kept for the config's next refresh."""
+        from raintux.core.state import apply_rainmeter_ini_key
+
+        if apply_rainmeter_ini_key(self.state, section, key, value):
+            self.schedule_save()
+        else:
+            log.debug("Rainmeter.ini [%s] %s has no effect on Linux", section, key)
+
+    def _run_windows_action(self, skin: Skin, action: Any, command: str) -> None:
+        """Run what a Windows click target means here (raintux.compat.shell)."""
+        from raintux.compat.shell import ROLES
+
+        try:
+            if action.note:
+                log.info("[%s] %s: %s", skin.config, command, action.note)
+            elif action.uri:
+                try:
+                    Gio.AppInfo.launch_default_for_uri(action.uri, None)
+                except GLib.Error:  # computer:/// and network:/// need GVfs: the home folder then
+                    Gio.AppInfo.launch_default_for_uri(Path.home().as_uri(), None)
+            elif action.role == "@browser":
+                app = Gio.AppInfo.get_default_for_uri_scheme("https")
+                urls = [a for a in action.argv if re.match(r"^https?://", a)]
+                if app is not None:
+                    app.launch_uris(urls, None) if urls else app.launch([], None)
+            elif action.role == "@editor" and action.argv:
+                self.open_in_editor(skin.path(action.argv[0]))
+            elif action.role in ROLES:
+                exe = next((e for e in map(shutil.which, ROLES[action.role]) if e), None)
+                if exe is None:
+                    log.info("[%s] %s: no %s app found", skin.config, command, action.role[1:])
+                else:
+                    subprocess.Popen([exe], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif action.argv:
+                subprocess.Popen(action.argv, cwd=str(skin.root), start_new_session=True,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            log.exception("[%s] command failed: %s", skin.config, command)
+
+    def open_in_editor(self, path: Path) -> None:
+        editor = self.config.ui.editor or os.environ.get("VISUAL") or os.environ.get("EDITOR")
+        if editor and shutil.which(editor.split()[0]):
+            terminal_editors = {"vi", "vim", "nvim", "nano", "micro", "emacs -nw", "helix", "hx"}
+            if editor in terminal_editors:
+                term = shutil.which("x-terminal-emulator") or shutil.which("foot") or shutil.which("kitty") or shutil.which("alacritty")
+                if term:
+                    subprocess.Popen([term, "-e", *editor.split(), str(path)], start_new_session=True)
+                    return
+            else:
+                subprocess.Popen([*editor.split(), str(path)], start_new_session=True)
+                return
+        Gio.AppInfo.launch_default_for_uri(path.as_uri(), None)
+
+    def host_bang(self, skin: Skin | None, name: str, args: list[str]) -> None:
+        """Bangs that act on windows, configs or the app (``!Refresh``, ``!Move``, ``!ActivateConfig``…).
+
+        ``skin`` is the skin that ran the bang; None when it came from outside (command line, API).
+        """
+
+        def target(idx: int) -> list[ActiveSkin]:
+            if len(args) > idx and args[idx].strip():
+                cfg = args[idx].strip()
+                if cfg == "*":
+                    return list(self.active.values())
+                a = self.active.get(cfg.replace("/", "\\").lower())
+                return [a] if a else []
+            a = self._act(skin) if skin is not None else None
+            return [a] if a else []
+
+        def flag(value: str, current: bool) -> bool:
+            v = int(parse_number(value, 0)) if value.strip() else 1
+            return (not current) if v == -1 else bool(v)
+
+        if name in ("refresh",):
+            for a in target(0):
+                cfg = a.skin.config
+                GLib.idle_add(lambda c=cfg: (self.refresh_config(c), GLib.SOURCE_REMOVE)[1])
+        elif name == "refreshapp":
+            GLib.idle_add(lambda: (self.refresh_all(), GLib.SOURCE_REMOVE)[1])
+        elif name == "refreshgroup" and args:
+            for a in self._group(args[0]):
+                GLib.idle_add(lambda c=a.skin.config: (self.refresh_config(c), GLib.SOURCE_REMOVE)[1])
+        elif name in ("move", "setwindowposition") and len(args) >= 2:
+            for a in target(2 if name == "move" else 4):
+                x = int(parse_number(args[0], a.skin.state.x))
+                y = int(parse_number(args[1], a.skin.state.y))
+                a.window.move_to(x, y)
+                self.window_moved(a.window)
+        elif name in ("draggable", "keeponscreen", "clickthrough", "snapedges") and args:
+            attr = {"draggable": "draggable", "keeponscreen": "keep_on_screen", "clickthrough": "click_through",
+                    "snapedges": "snap_edges"}[name]
+            for a in target(1):
+                setattr(a.skin.state, attr, flag(args[0], getattr(a.skin.state, attr)))
+                a.window.apply_state()
+            self.schedule_save()
+        elif name == "zpos" and args:
+            for a in target(1):
+                a.skin.state.z = max(-2, min(2, int(parse_number(args[0], 0))))
+                a.window.apply_state()
+            self.schedule_save()
+            self.schedule_restack()
+        elif name == "settransparency" and args:
+            for a in target(1):
+                a.skin.state.alpha = max(0, min(255, int(parse_number(args[0], 255))))
+                a.window.apply_state()
+            self.schedule_save()
+        elif name == "fadeduration" and args:
+            for a in target(1):
+                a.skin.state.fade_duration = max(0, int(parse_number(args[0], 250)))
+        elif name in ("show", "hide", "toggle", "showfade", "hidefade", "togglefade"):
+            for a in target(0):
+                fade = a.skin.state.fade_duration if name.endswith("fade") else 0
+                visible = a.window.get_opacity() > 0.01 and a.window.get_visible()
+                show = name.startswith("show") or (name.startswith("toggle") and not visible)
+                if show:
+                    a.window.set_visible(True)
+                    a.window.fade_to(a.skin.state.alpha / 255.0, fade)
+                else:
+                    a.window.fade_to(0.0, fade)
+        elif name == "fadewindow" and len(args) >= 2:
+            # Lua SKIN:FadeWindow(from, to): opacity from -> to over FadeDuration; the skin's
+            # transparency setting is left as it is.
+            start, end = (max(0, min(255, int(parse_number(v, 0)))) for v in args[:2])
+            for a in target(2):
+                if end > 0:
+                    a.window.set_visible(True)
+                a.window.set_opacity(start / 255.0)
+                a.window.fade_to(end / 255.0, a.skin.state.fade_duration)
+        elif name in ("activateconfig", "toggleconfig") and args:
+            cfg = args[0]
+            file = args[1] if len(args) > 1 else None
+            key = cfg.replace("/", "\\").lower()
+            if name == "toggleconfig" and key in self.active and (file is None or self.active[key].skin.ini_path.name.lower() == file.lower()):
+                self.deactivate_config(cfg)
+            elif skin is not None and key != skin.config.lower():
+                # Rainmeter::ActivateSkin creates the skin at once: Fountain of Colors' Initialize
+                # script reloads the visualizer, sets options on the new one and only then writes
+                # its OnRefreshAction back; loaded later, the visualizer relaunched Initialize.
+                self._safe_activate(cfg, file)
+            else:  # from outside, or replacing the skin that runs the bang: after its action
+                GLib.idle_add(lambda: (self._safe_activate(cfg, file), GLib.SOURCE_REMOVE)[1])
+        elif name == "deactivateconfig":
+            for a in target(0):
+                self.deactivate_config(a.skin.config)
+        elif name == "deactivateconfiggroup" and args:
+            for a in self._group(args[0]):
+                self.deactivate_config(a.skin.config)
+        elif name in ("manage", "about"):
+            self.show_manage(skin.config if skin is not None and name == "manage" and not args
+                             else (args[1] if len(args) > 1 else None))
+        elif name == "skinmenu":
+            for a in target(0):
+                self.show_context_menu(a.window, 10, 10)
+        elif name == "traymenu":
+            self.show_manage()
+        elif name == "quit":
+            GLib.idle_add(lambda: (self.app.quit(), GLib.SOURCE_REMOVE)[1])
+        elif name in ("edit", "editskin"):
+            for a in target(0):
+                self.open_in_editor(a.skin.ini_path)
+        elif name == "setclip" and args:
+            display = Gdk.Display.get_default()
+            if display is not None:
+                display.get_clipboard().set(args[0])
+        elif name == "setwallpaper" and args and skin is not None:
+            set_wallpaper(skin.path(args[0]))
+        elif name in ("showgroup", "hidegroup", "togglegroup", "showfadegroup", "hidefadegroup", "togglefadegroup") and args:
+            for a in self._group(args[0]):
+                self.host_bang(a.skin, name[:-5], [])
+        elif name in ("updategroup", "redrawgroup") and args:
+            for a in self._group(args[0]):
+                a.skin.bang(name[:-5], [])
+        elif name in ("disablemouseactionskingroup", "enablemouseactionskingroup", "togglemouseactionskingroup",
+                      "clearmouseactionskingroup") and len(args) >= 2:
+            local = name.replace("skingroup", "")
+            for a in self._group(args[1]):
+                a.skin.bang(local, ["*", args[0]])
+        elif name == "setzoomfactor" and args:
+            for a in target(1):
+                raw = args[0].strip()
+                cur = a.window.zoom
+                val = parse_number(raw.lstrip("+"), cur)
+                a.window.set_zoom(cur + val if raw.startswith(("+", "-")) else val)
+        elif name == "skincustommenu":
+            for a in target(0):
+                from raintux.gui.context_menu import show_custom_menu
+
+                show_custom_menu(self, a.window, 10, 10)
+        elif name == "loadlayout" and args:
+            GLib.idle_add(lambda: (self.load_layout(args[0]), GLib.SOURCE_REMOVE)[1])
+        elif name == "restart":
+            GLib.idle_add(lambda: (self._restart(), GLib.SOURCE_REMOVE)[1])
+        elif name == "debug":
+            self.show_manage()
+        elif name == "sendkey" and args:
+            from raintux.measures.plugins.media import MediaKeyPlugin
+
+            keymap = {"medianexttrack": "nexttrack", "mediaprevtrack": "prevtrack", "mediastop": "stop",
+                      "mediaplaypause": "playpause", "volumemute": "volumemute", "volumedown": "volumedown",
+                      "volumeup": "volumeup"}
+            key = keymap.get(args[0].strip().lower())
+            if key:
+                MediaKeyPlugin.command(MediaKeyPlugin.__new__(MediaKeyPlugin), key)
+        elif name in ("autoselectscreen", "autoselectscreengroup", "forceenablevisiblemode", "lsboxhook",
+                      "showblur", "hideblur", "toggleblur", "addblur", "removeblur", "resetstats", "setanchor"):
+            log.debug("!%s has no effect on Linux", name)
+        else:
+            log.info("!%s is not supported on this platform", name)
+
+    def _restart(self) -> None:
+        import sys
+
+        self.shutdown()
+        os.execv(sys.executable, [sys.executable, "-m", "raintux"])
+
+    def _safe_activate(self, config: str, file: str | None) -> None:
+        try:
+            self.activate_config(config, file)
+        except FileNotFoundError:
+            log.warning("!ActivateConfig: %s %s not found", config, file or "")
+        if self._manage_window is not None:
+            self._manage_window.refresh()
+
+    def _group(self, group: str) -> list[ActiveSkin]:
+        g = group.strip().lower()
+        out = []
+        for a in self.active.values():
+            groups = {x.strip().lower() for x in a.skin.rm.get("group").split("|") if x.strip()}
+            if g in groups:
+                out.append(a)
+        return out
+
+    def run_bang_threadsafe(self, action: str) -> None:
+        _on_main_thread(self.execute_global, action)
+
+    def execute_global(self, action: str) -> None:
+        """Bangs from the command line / tray: run against the named config or the first skin."""
+        for cmd in split_commands(action) or [action]:
+            args = split_args(cmd.lstrip("!"))
+            if not args:
+                continue
+            name = args[0].lower()
+            if name.startswith("rainmeter"):
+                name = name[len("rainmeter"):]
+            if name in _APP_BANGS:
+                # Not tied to one skin: runs the same with no skin loaded, or with many.
+                self.host_bang(None, name, args[1:])
+                continue
+            # Other bangs carry the target config as their last argument.
+            for a in list(self.active.values()):
+                if len(args) > 1 and args[-1].replace("/", "\\").lower() == a.skin.config.lower():
+                    a.skin.execute("[" + cmd + "]")
+                    break
+            else:
+                if len(self.active) == 1:
+                    next(iter(self.active.values())).skin.execute("[" + cmd + "]")
+                else:
+                    log.warning("bang %s: name the target config as the last argument", cmd)
+
+    # ------------------------------------------------------------------ stacking
+    def _creation_order(self, configs: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
+        """Skins to create, ordered so that their windows stack as Rainmeter's do (AlwaysOnTop,
+        then LoadOrder): the top one last, or first where new surfaces go to the bottom."""
+        ranked = sorted(configs, key=lambda kv: (kv[1].window.z, kv[1].load_order))
+        return ranked if self._new_on_top else ranked[::-1]
+
+    def _stack_rank(self, window: SkinWindow) -> tuple[int, int]:
+        return (window.skin.state.z, self.state.config(window.skin.config).load_order)
+
+    def _window_mapped(self, window: SkinWindow) -> None:
+        self._window_unmapped(window)
+        stack = self._stacks.setdefault(layer_for_zpos(window.skin.state.z), [])
+        stack.append(window) if self._new_on_top else stack.insert(0, window)
+
+    def _window_unmapped(self, window: SkinWindow) -> None:
+        for stack in self._stacks.values():
+            if window in stack:
+                stack.remove(window)
+
+    def schedule_restack(self) -> None:
+        """Order every layer's skins once the current activations are done."""
+        if self._restack_source:
+            return
+
+        def go() -> bool:
+            self._restack_source = 0
+            self.restack()
+            return GLib.SOURCE_REMOVE
+
+        self._restack_source = GLib.idle_add(go, priority=GLib.PRIORITY_LOW)
+
+    def restack(self) -> None:
+        for stack in list(self._stacks.values()):
+            for window in restack_plan(list(stack), self._stack_rank, self._new_on_top):
+                window.set_visible(False)  # mapped again, it is a new surface (see core/stacking.py)
+                window.set_visible(True)
+
+    # ------------------------------------------------------------------ windows
+    def show_context_menu(self, window: SkinWindow, x: float, y: float) -> None:
+        from raintux.gui.context_menu import show_context_menu
+
+        show_context_menu(self, window, x, y)
+
+    def show_manage(self, config: str | None = None) -> None:
+        from raintux.gui.manage import ManageWindow
+
+        if self._manage_window is None:
+            self._manage_window = ManageWindow(self)
+            self._manage_window.connect("destroy", lambda *_: setattr(self, "_manage_window", None))
+        self._manage_window.refresh(select=config)
+        self._manage_window.present()
+
+    def other_rects(self, window: SkinWindow) -> list[tuple[int, int, int, int]]:
+        return [(a.skin.state.x, a.skin.state.y, a.skin.width, a.skin.height)
+                for a in self.active.values() if a.window is not window]
+
+    def snap_position(self, window: SkinWindow, x: int, y: int) -> tuple[int, int]:
+        w, h = window.skin.width, window.skin.height
+        xs = []
+        ys = []
+        mon = monitor_at(x + w / 2, y + h / 2)
+        if mon is not None:
+            g = mon.get_geometry()
+            xs += [g.x, g.x + g.width - w]
+            ys += [g.y, g.y + g.height - h]
+        for ox, oy, ow, oh in self.other_rects(window):
+            xs += [ox, ox + ow, ox - w, ox + ow - w]
+            ys += [oy, oy + oh, oy - h, oy + oh - h]
+        bx = min(xs, key=lambda v: abs(v - x), default=x)
+        by = min(ys, key=lambda v: abs(v - y), default=y)
+        return (bx if abs(bx - x) <= 10 else x, by if abs(by - y) <= 10 else y)
+
+    def clamp_on_screen(self, window: SkinWindow, x: int, y: int) -> tuple[int, int]:
+        w, h = window.skin.width, window.skin.height
+        mon = monitor_at(x + w / 2, y + h / 2)
+        if mon is None:
+            return (x, y)
+        g = mon.get_geometry()
+        x = max(g.x, min(x, g.x + g.width - w))
+        y = max(g.y, min(y, g.y + g.height - h))
+        return (x, y)
+
+    def window_moved(self, window: SkinWindow) -> None:
+        st = window.skin.state
+        st.window_x = st.window_y = None  # placed somewhere else: x / y hold the position now
+        window.skin.invalidate_builtins()
+        if st.save_position:
+            self.schedule_save()
+
+    def _monitor_rects(self) -> list[Rect]:
+        return [(g.x, g.y, g.width, g.height) for g in (m.get_geometry() for m in monitors())]
+
+    def _place_from_options(self, act: ActiveSkin) -> bool:
+        """Put the skin where WindowX / WindowY as written say (formulas, R / B, %, @N, anchors)."""
+        st = act.skin.state
+        pos = authored_position(st, (act.skin.width, act.skin.height), self._monitor_rects(), act.window.zoom)
+        if pos is None:
+            return False
+        x, y = self.clamp_on_screen(act.window, *pos) if st.keep_on_screen else pos
+        act.window.move_to(x, y)
+        return True
+
+    def _resized(self, act: ActiveSkin, width: int, height: int) -> None:
+        """Rainmeter places a skin again when its size changes: its anchor point stays where it
+        was (AnchorX=50% keeps it centred) and KeepOnScreen holds."""
+        old = act.size
+        if old is None or old == (width, height):
+            return  # not placed yet (its first update), or no change
+        act.size = (width, height)
+        if self._place_from_options(act):
+            return
+        st, zoom = act.skin.state, act.window.zoom
+        x = st.x + anchor_offset(st.anchor_x, old[0], zoom, "R") - anchor_offset(st.anchor_x, width, zoom, "R")
+        y = st.y + anchor_offset(st.anchor_y, old[1], zoom, "B") - anchor_offset(st.anchor_y, height, zoom, "B")
+        if st.keep_on_screen:
+            x, y = self.clamp_on_screen(act.window, x, y)
+        if (x, y) != (st.x, st.y):
+            act.window.move_to(x, y)
+
+
+_cursor_cache: dict[str, Any] = {}
+
+
+def _file_cursor(path: str) -> Any:
+    """A Windows .cur (or any image) as a GDK cursor, hotspot taken from the .cur header."""
+    if path in _cursor_cache:
+        return _cursor_cache[path]
+    cursor = None
+    try:
+        from raintux.meters.images import load_image
+
+        img = load_image(Path(path))
+        if img is not None:
+            hx = hy = 0
+            raw = Path(path).read_bytes()[:22]
+            if path.lower().endswith(".cur") and len(raw) >= 14 and raw[2:4] == b"\x02\x00":
+                hx = int.from_bytes(raw[10:12], "little")
+                hy = int.from_bytes(raw[12:14], "little")
+            data = img.pil.tobytes()
+            texture = Gdk.MemoryTexture.new(img.width, img.height, Gdk.MemoryFormat.R8G8B8A8,
+                                            GLib.Bytes.new(data), img.width * 4)
+            cursor = Gdk.Cursor.new_from_texture(texture, hx, hy, Gdk.Cursor.new_from_name("pointer", None))
+    except Exception:
+        log.debug("cursor %s failed", path, exc_info=True)
+    _cursor_cache[path] = cursor
+    return cursor
+
+
+def install_default_skins(root: Path) -> None:
+    """Copy bundled skins into the user's skins folder (never overwriting user files)."""
+    src = Path(__file__).resolve().parent.parent / "data" / "skins"
+    if not src.is_dir():
+        return
+    for item in src.iterdir():
+        dest = root / item.name
+        if dest.exists():
+            continue
+        try:
+            shutil.copytree(item, dest) if item.is_dir() else shutil.copy2(item, dest)
+            log.info("installed default skins: %s", dest)
+        except OSError:
+            log.warning("could not install %s", dest, exc_info=True)
+
+
+def set_wallpaper(path: Path) -> None:
+    """Best-effort wallpaper change across desktops (GNOME, KDE, sway/Hyprland via swaybg)."""
+    uri = path.resolve().as_uri()
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    try:
+        if "gnome" in desktop or "unity" in desktop or "cinnamon" in desktop:
+            for key in ("picture-uri", "picture-uri-dark"):
+                subprocess.run(["gsettings", "set", "org.gnome.desktop.background", key, uri], check=False)
+        elif "kde" in desktop and shutil.which("plasma-apply-wallpaperimage"):
+            subprocess.run(["plasma-apply-wallpaperimage", str(path)], check=False)
+        elif os.environ.get("SWAYSOCK") and shutil.which("swaymsg"):
+            subprocess.run(["swaymsg", "output", "*", "bg", str(path), "fill"], check=False)
+        elif shutil.which("swww"):
+            subprocess.run(["swww", "img", str(path)], check=False)
+        elif shutil.which("swaybg"):
+            subprocess.Popen(["swaybg", "-i", str(path), "-m", "fill"], start_new_session=True)
+        else:
+            log.info("!SetWallpaper: no supported wallpaper tool found")
+    except OSError:
+        log.exception("!SetWallpaper failed")
 
 
 _ENGINE: RainTuxEngine | None = None
@@ -200,9 +1142,21 @@ def get_engine() -> RainTuxEngine:
     return _ENGINE
 
 
-def run_engine(dev_mode: bool = False) -> int:
-    """Start RainTux (GTK main loop). Returns process exit code."""
-    logging.basicConfig(level=logging.DEBUG if dev_mode else logging.INFO)
+def run_engine(dev_mode: bool = False, argv: list[str] | None = None) -> int:
+    """Start RainTux (GTK main loop), or forward the command line to the running instance."""
+    logging.basicConfig(level=logging.DEBUG if dev_mode else logging.INFO,
+                        format="%(levelname)s %(name)s: %(message)s")
+    import locale
+
+    try:
+        locale.setlocale(locale.LC_ALL, "")  # localized day/month names in Time measures
+    except locale.Error:
+        pass
+    from raintux.gui.fonts import install_font_aliases
+    from raintux.gui.log_buffer import install_log_buffer
+
+    install_font_aliases()
+    install_log_buffer()
     cfg = load_config()
     from raintux.api.rest_api import start_api_server
 
@@ -210,48 +1164,89 @@ def run_engine(dev_mode: bool = False) -> int:
 
     class App(Gtk.Application):
         def __init__(self) -> None:
-            super().__init__(application_id="org.raintux.RainTux", flags=Gio.ApplicationFlags.FLAGS_NONE)
+            super().__init__(application_id="org.raintux.RainTux", flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+            self.started = False
+
+        def do_command_line(self, cmdline: Gio.ApplicationCommandLine) -> int:
+            args = list(cmdline.get_arguments() or [])[1:]
+            if not self.started:
+                self.started = True
+                self.activate()
+                if args:
+                    GLib.timeout_add(1500, lambda: (handle_args(args), GLib.SOURCE_REMOVE)[1])
+                return 0
+            if not args:
+                eng.show_manage()
+            else:
+                handle_args(args)
+            return 0
 
         def do_activate(self) -> None:
-            """Gtk.Application requires activation; overlay windows are created by the engine/API."""
-            _ = self  # hold reference — no primary window required
+            pass
+
+    def handle_args(args: list[str]) -> None:
+        if not args:
+            return
+        if args[0] in ("--manage", "manage"):
+            eng.show_manage(args[1] if len(args) > 1 else None)
+        elif args[0] in ("--refresh-all", "refresh"):
+            eng.refresh_all()
+        elif args[0] in ("install",) and len(args) > 1:
+            from raintux.gui.installer import install_dialog
+
+            install_dialog(eng, Path(args[1]))
+        elif args[0].lower().endswith(".rmskin"):
+            from raintux.gui.installer import install_dialog
+
+            install_dialog(eng, Path(args[0]))
+        elif args[0].startswith("!") or args[0].startswith("["):
+            eng.execute_global(" ".join(_quote(a) for a in args))
+        else:
+            log.warning("unknown arguments: %s", args)
 
     app = App()
+    if not _has_session_bus():
+        # Without D-Bus GApplication cannot register; run as a plain, non-unique app.
+        app.set_flags(app.get_flags() | Gio.ApplicationFlags.NON_UNIQUE)
     eng = RainTuxEngine(cfg, app)
     _ENGINE = eng
+    import signal
 
-    # Bootstrap example skin path for first run
-    pkg_default = Path(__file__).resolve().parent.parent / "data" / "skins" / "Minimal" / "skin.ini"
-    if pkg_default.is_file():
-        roots = [Path(p).expanduser() for p in cfg.engine.skins_roots]
-        minimal_dir = Path.home() / "RainTux" / "Skins" / "Minimal"
-        if not any((Path(r) / "Minimal" / "skin.ini").is_file() for r in roots if r.exists()):
-            minimal_dir.mkdir(parents=True, exist_ok=True)
-            target = minimal_dir / "skin.ini"
-            if not target.exists():
-                try:
-                    target.write_text(pkg_default.read_text(encoding="utf-8"), encoding="utf-8")
-                except OSError:
-                    log.warning("could not install default Minimal skin to %s", target)
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, lambda *_a: (app.quit(), GLib.SOURCE_REMOVE)[1])
 
     def on_startup(_app: Gtk.Application) -> None:
         from raintux.onboarding.first_run import begin_first_run_or_skip
+
+        # Keep running with zero windows; GApplication would exit after activate otherwise.
+        _app.hold()
 
         def after_first_run(ok: bool) -> None:
             if not ok:
                 _app.quit()
                 return
-            eng.start_background_loop()
-            start_api_server(eng, cfg)
-            try:
-                if dev_mode:
-                    ini = eng.resolve_ini("Minimal/skin.ini") or eng.resolve_ini("Minimal")
-                    if ini:
-                        eng.load_skin("Minimal/skin.ini", ini)
-            except Exception:
-                log.exception("dev auto-load failed")
+            if cfg.api.enabled:
+                try:
+                    start_api_server(eng, cfg)
+                except Exception:
+                    log.exception("API server failed to start")
+            eng.start()
 
         begin_first_run_or_skip(_app, after_first_run)
 
     app.connect("startup", on_startup)
-    return app.run(None)
+    app.connect("shutdown", lambda *_: eng.shutdown())
+    import sys
+
+    return app.run(argv if argv is not None else sys.argv)
+
+
+def _has_session_bus() -> bool:
+    if os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        return True
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return Path(runtime, "bus").exists()
+
+
+def _quote(arg: str) -> str:
+    return f'"{arg}"' if (" " in arg and not arg.startswith(("[", "!"))) else arg

@@ -1,0 +1,29 @@
+illustro (RainTux edition)
+==========================
+
+illustro was created by poiru for Rainmeter (https://rainmeter.net) and ships with
+Rainmeter as its default skin suite. This folder is an adaptation of it for RainTux.
+
+Original work:  illustro, by poiru / the Rainmeter team
+Adaptation:     illustro (RainTux edition), by Viktor_Hashmat
+
+License: Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported
+         https://creativecommons.org/licenses/by-nc-sa/3.0/
+
+This license covers only the files in this folder. They are NOT covered by RainTux's
+GNU GPL v2 license. In short, you may share and adapt these skins if you:
+  - give credit to poiru and the Rainmeter team (and to this adaptation),
+  - do not use them for commercial purposes, and
+  - share your changes under this same license.
+Anyone redistributing RainTux commercially must leave this folder out.
+
+Changes from the original:
+  - Text, comments and links point to RainTux instead of Rainmeter (Welcome skin,
+    "Getting Started" and issue links, comments about the tray icon).
+  - Disk: Linux mount points (/ and /home) instead of drive letters C: and D:.
+  - System: clicking the title opens the desktop's system monitor instead of taskmgr.exe.
+  - "Recycle Bin" is now "Trash"; a right-click no longer empties it (Rainmeter asks for
+    confirmation first; RainTux shows the skin menu instead).
+  - Files are UTF-8 encoded.
+
+RainTux is not affiliated with or endorsed by the Rainmeter team.
