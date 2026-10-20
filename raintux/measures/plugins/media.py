@@ -613,6 +613,21 @@ class AudioLevelPlugin(Measure):
             self.get_number("freqmin", 20.0),
             self.get_number("freqmax", 20000.0),
         )
+        if self.has("updatespersecond"):
+            # AudioLevelBeta (Fountain of Colors) updates its parent measure itself, so a skin with
+            # Update=-1 animates through the parent's OnUpdateAction; -1: as often as the audio
+            # comes in (about 60 times a second here).
+            ups = self.get_number("updatespersecond", -1)
+            self._self_update(int(1000 / ups) if ups > 0 else 16)
+
+    def _self_update(self, ms: int) -> None:
+        def tick() -> None:
+            if self.skin.closed or self.disabled:
+                return
+            self.update_now()
+            self.skin.host.call_later(ms, tick)
+
+        self.skin.host.call_later(ms, tick)
 
     def _channel(self, pair: list[float]) -> float:
         if self.channel in ("l", "left", "0"):
@@ -629,7 +644,7 @@ class AudioLevelPlugin(Measure):
             self._raw_number = 0.0
             return
         k = self.kind
-        if k == "devicestatus":
+        if k in ("devicestatus", "bufferstatus"):  # BufferStatus: AudioLevelBeta, 1 while audio comes in
             self._raw_number = float(cap.status)
             return
         if k == "rms":

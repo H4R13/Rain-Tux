@@ -387,6 +387,37 @@ def test_write_key_value_into_rainmeter_ini(tmp_path: Path, monkeypatch: pytest.
     assert (state.config("Test").window.z, state.config("Test").window.draggable) == (-2, False)
 
 
+def test_audiolevelbeta_updates_its_skin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fountain of Colors has Update=-1: its AudioLevelBeta parent (UpdatesPerSecond) updates
+    itself, and its OnUpdateAction updates the bars."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(media, "_AudioCapture", lambda *a: SimpleNamespace(status=1, close=lambda: None))
+    skin, host = make_skin(tmp_path, """
+        [Rainmeter]
+        Update=-1
+
+        [Variables]
+        Ticks=0
+
+        [Audio]
+        Measure=Plugin
+        Plugin=AudioLevelBeta
+        Type=BufferStatus
+        UpdatesPerSecond=25
+        OnUpdateAction=[!SetVariable Ticks (#Ticks#+1)]
+        DynamicVariables=1
+    """)
+    skin.update()
+    ticks = int(skin.get_variable("Ticks"))
+    ms, tick = host.timers.pop(0)
+    assert ms == 40
+    tick()
+    assert int(skin.get_variable("Ticks")) == ticks + 1
+    assert skin.measure("Audio").value == 1
+    assert host.timers and host.timers[-1][0] == 40  # and again
+
+
 @pytest.mark.gtk
 def test_activate_config_from_a_skin_is_immediate(tmp_path: Path) -> None:
     """Fountain of Colors' Initialize script reloads the visualizer and sets options on the new
