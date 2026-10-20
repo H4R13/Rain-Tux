@@ -450,6 +450,14 @@ def _run_idle() -> None:
         pass
 
 
+def test_pcre_lookbehind_alternatives_of_different_widths() -> None:
+    r"""SystemFetch's calendar: InlinePattern=(?<=^|\n)\x20; Python refused the variable width."""
+    from raintux.core.pcre import compile_pcre
+
+    assert [m.start() for m in compile_pcre(r"(?<=^|\n)\x20").finditer(" a\n b  c")] == [0, 3]
+    assert [m.start() for m in compile_pcre(r"(?<!ab|c)d").finditer("abd cd xd")] == [8]
+
+
 @pytest.mark.parametrize("new_on_top", [True, False])
 @pytest.mark.parametrize("current", ["abcd", "dcba", "badc", "acbd", "dabc", "bcda"])
 def test_restack_plan_orders_a_layer(current: str, new_on_top: bool) -> None:

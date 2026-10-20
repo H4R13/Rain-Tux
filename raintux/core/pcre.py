@@ -199,6 +199,36 @@ def _conditionals(p: str) -> str:
     return "".join(out)
 
 
+def _lookbehinds(p: str) -> str:
+    """PCRE lets each alternative of a lookbehind have its own fixed width (``(?<=^|\\n)``);
+    Python wants one width. ``(?<=a|bc)`` becomes ``(?:(?<=a)|(?<=bc))`` and ``(?<!a|bc)``
+    becomes ``(?<!a)(?<!bc)``."""
+    out: list[str] = []
+    i = 0
+    while (j := p.find("(?<", i)) >= 0:
+        if (len(p[:j]) - len(p[:j].rstrip("\\"))) % 2 or p[j + 3:j + 4] not in ("=", "!"):
+            out.append(p[i:j + 1])
+            i = j + 1
+            continue
+        end = _group_end(p, j)
+        body = p[j + 4:end - 1]
+        alts: list[str] = []
+        while (bar := _top_level_bar(body)) >= 0:
+            alts.append(body[:bar])
+            body = body[bar + 1:]
+        alts.append(body)
+        kind = p[j + 3]
+        if len(alts) == 1:
+            out.append(p[i:j] + "(?<" + kind + _lookbehinds(alts[0]) + ")")
+        elif kind == "=":
+            out.append(p[i:j] + "(?:" + "|".join(f"(?<={_lookbehinds(a)})" for a in alts) + ")")
+        else:
+            out.append(p[i:j] + "".join(f"(?<!{_lookbehinds(a)})" for a in alts))
+        i = end
+    out.append(p[i:])
+    return "".join(out)
+
+
 @functools.lru_cache(maxsize=512)
 def compile_pcre(pattern: str) -> re.Pattern[str]:
     """Compile a Rainmeter (PCRE) regular expression."""
@@ -217,6 +247,7 @@ def compile_pcre(pattern: str) -> re.Pattern[str]:
                     flags |= _FLAGS[ch.lower()]
     p = re.sub(r"\(\?<(?=[A-Za-z_])", "(?P<", p)
     p = _conditionals(p)
+    p = _lookbehinds(p)
     p = _fix_classes(p)
     if ungreedy:
         p = _swap_greediness(p)
