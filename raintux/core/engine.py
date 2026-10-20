@@ -285,10 +285,16 @@ class RainTuxEngine:
             log.exception("closing %s", act.skin.config)
 
     def deactivate_config(self, config: str) -> None:
+        """Unload a config. As Skin::Deactivate, it is gone at once (an action can load it again
+        right after) and stops updating; the skin closes (OnCloseAction, measures) once the
+        current action is over, so a skin can unload itself from its own action or script."""
         act = self.active.pop(config.replace("/", "\\").lower(), None)
         if act is None:
             return
-        self._stop(act)
+        if act.timer:
+            GLib.source_remove(act.timer)
+            act.timer = 0
+        GLib.idle_add(lambda: (self._stop(act), GLib.SOURCE_REMOVE)[1])
         self.state.config(act.skin.config).active_file = None
         fade = act.skin.state.fade_duration
         act.window.fade_to(0.0, fade, then=act.window.destroy)
@@ -814,15 +820,20 @@ class RainTuxEngine:
             file = args[1] if len(args) > 1 else None
             key = cfg.replace("/", "\\").lower()
             if name == "toggleconfig" and key in self.active and (file is None or self.active[key].skin.ini_path.name.lower() == file.lower()):
-                GLib.idle_add(lambda: (self.deactivate_config(cfg), GLib.SOURCE_REMOVE)[1])
-            else:
+                self.deactivate_config(cfg)
+            elif skin is not None and key != skin.config.lower():
+                # Rainmeter::ActivateSkin creates the skin at once: Fountain of Colors' Initialize
+                # script reloads the visualizer, sets options on the new one and only then writes
+                # its OnRefreshAction back; loaded later, the visualizer relaunched Initialize.
+                self._safe_activate(cfg, file)
+            else:  # from outside, or replacing the skin that runs the bang: after its action
                 GLib.idle_add(lambda: (self._safe_activate(cfg, file), GLib.SOURCE_REMOVE)[1])
         elif name == "deactivateconfig":
             for a in target(0):
-                GLib.idle_add(lambda c=a.skin.config: (self.deactivate_config(c), GLib.SOURCE_REMOVE)[1])
+                self.deactivate_config(a.skin.config)
         elif name == "deactivateconfiggroup" and args:
             for a in self._group(args[0]):
-                GLib.idle_add(lambda c=a.skin.config: (self.deactivate_config(c), GLib.SOURCE_REMOVE)[1])
+                self.deactivate_config(a.skin.config)
         elif name in ("manage", "about"):
             self.show_manage(skin.config if skin is not None and name == "manage" and not args
                              else (args[1] if len(args) > 1 else None))

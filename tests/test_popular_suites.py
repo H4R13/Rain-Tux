@@ -387,6 +387,38 @@ def test_write_key_value_into_rainmeter_ini(tmp_path: Path, monkeypatch: pytest.
     assert (state.config("Test").window.z, state.config("Test").window.draggable) == (-2, False)
 
 
+@pytest.mark.gtk
+def test_activate_config_from_a_skin_is_immediate(tmp_path: Path) -> None:
+    """Fountain of Colors' Initialize script reloads the visualizer and sets options on the new
+    one in the same call (Rainmeter::ActivateSkin creates the skin at once). Replacing the skin
+    that runs the bang still waits for its action to end."""
+    from functools import partial
+    from types import SimpleNamespace
+
+    from raintux.core.engine import RainTuxEngine
+
+    skin, _ = make_skin(tmp_path, "[Rainmeter]\n", name="Init")
+    calls: list[tuple] = []
+    eng = SimpleNamespace(active={"suite": SimpleNamespace(skin=SimpleNamespace(config="Suite"))},
+                          _safe_activate=lambda c, f: calls.append(("activate", c, f)),
+                          deactivate_config=lambda c: calls.append(("deactivate", c)))
+    bang = partial(RainTuxEngine.host_bang, eng)
+    bang(skin, "deactivateconfig", ["Suite"])
+    bang(skin, "activateconfig", ["Suite", "Suite.ini"])
+    bang(skin, "activateconfig", ["Init", "Other.ini"])
+    assert calls == [("deactivate", "Suite"), ("activate", "Suite", "Suite.ini")]
+    _run_idle()
+    assert calls[-1] == ("activate", "Init", "Other.ini")
+
+
+def _run_idle() -> None:
+    from gi.repository import GLib
+
+    ctx = GLib.MainContext.default()
+    while ctx.iteration(False):
+        pass
+
+
 @pytest.mark.parametrize("new_on_top", [True, False])
 @pytest.mark.parametrize("current", ["abcd", "dcba", "badc", "acbd", "dabc", "bcda"])
 def test_restack_plan_orders_a_layer(current: str, new_on_top: bool) -> None:
